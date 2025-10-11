@@ -1,0 +1,243 @@
+# RSS推送服务
+
+一个自动化的RSS订阅源抓取和推送服务,支持将RSS新闻推送到PushPlus群组。
+
+## 功能特性
+
+- ✅ 自动抓取RSS订阅源
+- ✅ 智能过滤未推送内容(数据库去重)
+- ✅ 去重和排序处理
+- ✅ 推送到PushPlus群组
+- ✅ 支持HTML/Markdown/纯文本格式
+- ✅ SQLite数据库防止重复推送
+- ✅ 定时调度自动执行
+- ✅ 推送时间窗口控制(可选)
+- ✅ 完善的日志系统
+
+**核心机制:** 不按日期过滤,推送所有RSS源中未推送的内容,数据库自动防止重复推送。
+
+## 项目结构
+
+```
+RSS推送/
+├── config/
+│   └── app.yaml              # 配置文件
+├── data/                     # 数据库存储目录
+├── logs/                     # 日志文件目录
+├── src/
+│   ├── config/              # 配置管理
+│   │   └── loader.py
+│   ├── db/                  # 数据库存储
+│   │   └── storage.py
+│   ├── models/              # 数据模型
+│   │   └── rss_item.py
+│   ├── pushers/             # 推送器
+│   │   ├── base.py
+│   │   └── pushplus.py
+│   ├── rss/                 # RSS处理
+│   │   ├── fetcher.py
+│   │   └── parser.py
+│   └── utils/               # 工具函数
+│       └── logger.py
+├── main.py                  # 主程序入口
+└── requirements.txt         # Python依赖
+
+```
+
+## 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+## 配置说明
+
+编辑 `config/app.yaml` 文件:
+
+```yaml
+# RSS订阅源配置
+rss:
+  url: "http://your-rss-feed-url/feed.rss"
+  fetch_interval: 5  # 每5分钟检查一次
+
+# PushPlus配置
+pushplus:
+  token: "your-pushplus-token"      # 你的PushPlus Token
+  topic: "66"                        # 群组编号
+  message_template:
+    max_items: 5                     # 一次推送最多几条新闻
+    include_description: true        # 是否包含描述
+    include_image: true              # 是否包含图片
+    template: "html"                 # 消息格式: html, markdown, txt
+```
+
+## 使用方法
+
+### 1. 启动定时服务(推荐)
+
+```bash
+python main.py
+```
+
+服务将按配置的时间间隔自动抓取并推送。
+
+### 2. 仅执行一次
+
+```bash
+python main.py --once
+```
+
+### 3. 测试推送器连接
+
+```bash
+python main.py --test
+```
+
+### 4. 查看推送统计
+
+```bash
+python main.py --stats
+```
+
+### 5. 清理旧记录
+
+```bash
+python main.py --cleanup 30  # 清理30天前的记录
+```
+
+### 6. 使用自定义配置文件
+
+```bash
+python main.py --config /path/to/config.yaml
+```
+
+## 推送格式示例
+
+### HTML格式 (默认)
+推送消息将包含:
+- 标题和链接
+- 文章摘要
+- 配图(如果有)
+- 发布时间
+- 美化的HTML样式
+
+### Markdown格式
+适合支持Markdown的推送渠道,格式清晰简洁。
+
+### 纯文本格式
+最简单的文本格式,兼容性最好。
+
+## 配置选项
+
+### RSS配置
+- `url`: RSS订阅源地址
+- `fetch_interval`: 抓取间隔(分钟)
+
+### PushPlus配置
+- `token`: PushPlus的Token
+- `topic`: 群组编号
+- `message_template.max_items`: 单次推送最大条目数
+- `message_template.template`: 消息格式(html/markdown/txt)
+
+### 时间窗口配置
+```yaml
+push:
+  time_window:
+    start: "09:00"
+    end: "18:00"
+    enabled: true  # 启用后仅在此时间段推送
+```
+
+### 日志配置
+```yaml
+logging:
+  level: "INFO"           # DEBUG, INFO, WARNING, ERROR
+  file: "logs/app.log"
+  max_size: "10MB"
+  backup_count: 5
+```
+
+### 数据库配置
+```yaml
+database:
+  type: "sqlite"
+  path: "data/pushed_items.db"
+```
+
+## 常见问题
+
+### 1. 如何获取PushPlus Token?
+访问 [PushPlus官网](http://www.pushplus.plus/) 注册并获取Token。
+
+### 2. 推送失败怎么办?
+- 检查Token和Topic是否正确
+- 运行 `python main.py --test` 测试连接
+- 查看 `logs/app.log` 日志文件
+
+### 3. 如何避免重复推送?
+程序会自动记录已推送的内容到SQLite数据库,避免重复推送。
+
+### 4. 如何修改推送频率?
+修改 `config/app.yaml` 中的 `rss.fetch_interval` 值(单位:分钟)。
+
+### 5. 如何部署为后台服务?
+
+**Linux (使用systemd):**
+创建 `/etc/systemd/system/rss-push.service`:
+```ini
+[Unit]
+Description=RSS Push Service
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/RSS推送
+ExecStart=/usr/bin/python3 /path/to/RSS推送/main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动服务:
+```bash
+sudo systemctl enable rss-push
+sudo systemctl start rss-push
+```
+
+**Windows (使用nssm):**
+1. 下载 [NSSM](https://nssm.cc/download)
+2. 以管理员身份运行:
+```cmd
+nssm install RSSPush "python" "C:\path\to\RSS推送\main.py"
+nssm start RSSPush
+```
+
+## 开发与扩展
+
+### 添加新的推送器
+1. 在 `src/pushers/` 创建新的推送器类
+2. 继承 `BasePusher` 抽象类
+3. 实现必需的方法
+4. 在 `main.py` 中注册新推送器
+
+### 自定义消息格式
+修改 `src/pushers/pushplus.py` 中的 `_format_*_message` 方法。
+
+## 许可证
+
+MIT License
+
+## 作者
+
+RSS推送服务项目
+
+## 更新日志
+
+### v1.0.0 (2024-10-10)
+- 初始版本发布
+- 支持PushPlus推送
+- 完整的RSS抓取和解析功能
+- SQLite数据库支持
+- 定时调度功能

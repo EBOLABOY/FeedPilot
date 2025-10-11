@@ -1,0 +1,92 @@
+# RSS推送服务配置示例
+# 复制此文件并根据实际情况修改配置值
+
+# RSS订阅源配置
+rss:
+  url: "http://47.79.39.147:8001/feed/all.rss"
+  # 注意: 不再按日期过滤,而是推送所有未推送的内容,数据库会自动去重
+
+# 推送配置
+push:
+  # 启用哪些推送方式
+  enabled_pushers:
+    - pushplus
+
+  # 推送时间窗口（例如：只在9:00-18:00之间推送）
+  time_window:
+    start: "09:00"
+    end: "18:00"
+    enabled: false
+
+# PushPlus配置
+pushplus:
+  token: "f3da240f668a4fa7ac8db1f9eaa16d39"  # PushPlus Token
+  topic: "66"  # 群组编号
+
+  # 消息模板配置
+  message_template:
+    max_items: 20  # 一次推送最多几条新闻(建议10-20条,0表示不限制但可能超长)
+    include_description: true  # 是否包含描述
+    include_image: false  # 是否尝试添加图片(图片会增加内容长度)
+    template: "html"  # 消息模板: html, txt, json, markdown
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "logs/app.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# 数据库配置（用于记录已推送的内容）
+database:
+  type: "sqlite"
+  path: "data/pushed_items.db"
+
+# AI内容筛选配置
+ai_filter:
+  enabled: true  # 是否启用AI筛选
+  provider: "openai"  # rule: 规则评分(不需API), openai: OpenAI兼容API, claude: Claude
+  # API配置优先从.env文件读取(AI_API_KEY, AI_API_BASE, AI_MODEL)
+  # 也可以在这里直接配置(不推荐,避免泄露密钥)
+  # api_key: ""  # API密钥
+  # api_base: ""  # API地址
+  # model: ""  # 模型名称
+
+  # 用户兴趣(用于AI评分)
+  interests:
+    - "教育科技"
+    - "教学方法"
+    - "学校管理"
+    - "教育创新"
+    - "人工智能教育"
+
+  # 关键词筛选(规则模式)
+  keywords_include:  # 包含这些词加分
+    - "教育"
+    - "教学"
+    - "学生"
+    - "教师"
+    - "课程"
+    - "学校"
+    - "AI"
+    - "人工智能"
+    - "创新"
+    - "管理"
+
+  keywords_exclude:  # 包含这些词减分
+    - "广告"
+    - "推广"
+    - "招生"
+    - "培训班"
+
+  # 评分阈值
+  min_score: 6.0  # 最低6分才推送
+  max_items: 15   # 最多保留15条(超过15条分多次推送)
+
+# 调度配置
+scheduler:
+  enabled: true
+  timezone: "Asia/Shanghai"
+  # 每天定时执行
+  schedule_type: "daily"  # daily: 每天执行, interval: 按间隔执行
+  daily_time: "07:30"     # 每天执行的时间(HH:MM格式)

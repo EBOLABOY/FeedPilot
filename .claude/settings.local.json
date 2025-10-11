@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree -L 2 -a)",
+      "Bash(python main.py --test)",
+      "Bash(pip install -r requirements.txt)",
+      "Bash(python main.py --once)",
+      "Bash(python main.py --stats)",
+      "WebFetch(domain:47.79.39.147)",
+      "Bash(python debug_rss.py)",
+      "Bash(pip install python-dateutil)",
+      "Bash(git init)",
+      "Bash(git add .)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
