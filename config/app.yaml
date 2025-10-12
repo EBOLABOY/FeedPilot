@@ -28,7 +28,7 @@ pushplus:
     max_items: 20  # 一次推送最多几条新闻(建议10-20条,0表示不限制但可能超长)
     include_description: true  # 是否包含描述
     include_image: false  # 是否尝试添加图片(图片会增加内容长度)
-    template: "html"  # 消息模板: html, txt, json, markdown
+    template: "markdown"  # 消息模板: html, txt, json, markdown
 
 # 日志配置
 logging:
@@ -42,46 +42,15 @@ database:
   type: "sqlite"
   path: "data/pushed_items.db"
 
-# AI内容筛选配置
-ai_filter:
-  enabled: true  # 是否启用AI筛选
-  provider: "openai"  # rule: 规则评分(不需API), openai: OpenAI兼容API, claude: Claude
+# 内容增强配置（使用专业提示词进行深度分析）
+content_enhancer:
+  enabled: true  # 是否启用内容增强（需要消耗更多API token）
+  provider: "openai"  # openai 或 claude
   # API配置优先从.env文件读取(AI_API_KEY, AI_API_BASE, AI_MODEL)
-  # 也可以在这里直接配置(不推荐,避免泄露密钥)
-  # api_key: ""  # API密钥
-  # api_base: ""  # API地址
-  # model: ""  # 模型名称
-
-  # 用户兴趣(用于AI评分)
-  interests:
-    - "教育科技"
-    - "教学方法"
-    - "学校管理"
-    - "教育创新"
-    - "人工智能教育"
-
-  # 关键词筛选(规则模式)
-  keywords_include:  # 包含这些词加分
-    - "教育"
-    - "教学"
-    - "学生"
-    - "教师"
-    - "课程"
-    - "学校"
-    - "AI"
-    - "人工智能"
-    - "创新"
-    - "管理"
-
-  keywords_exclude:  # 包含这些词减分
-    - "广告"
-    - "推广"
-    - "招生"
-    - "培训班"
-
-  # 评分阈值
-  min_score: 6.0  # 最低6分才推送
-  max_items: 15   # 最多保留15条(超过15条分多次推送)
+  # 也可以在这里直接配置(不推荐)
+  # api_key: ""
+  # api_base: ""
+  # model: ""
 
 # 调度配置
 scheduler:

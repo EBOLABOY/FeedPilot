@@ -1,3 +1,3 @@
-from .scorer import AIContentScorer
+from .content_enhancer import ContentEnhancer
 
-__all__ = ['AIContentScorer']
+__all__ = ['ContentEnhancer']

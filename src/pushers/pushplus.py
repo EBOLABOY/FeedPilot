@@ -219,6 +219,61 @@ class PushPlusPusher(BasePusher):
 
         return title, ''.join(text_parts)
 
+    def push_custom_message(self, title: str, content: str, template: str = 'markdown') -> Dict[str, Any]:
+        """
+        推送自定义消息（用于内容增强）
+        :param title: 消息标题
+        :param content: 消息内容
+        :param template: 消息格式 (html/markdown/txt)
+        :return: 推送结果
+        """
+        try:
+            payload = {
+                'token': self.token,
+                'title': title,
+                'content': content,
+                'topic': self.topic,
+                'template': template
+            }
+
+            logger.info(f"开始推送自定义消息到PushPlus, 标题: {title}")
+
+            response = requests.post(self.API_URL, json=payload, timeout=30)
+            response.raise_for_status()
+
+            result = response.json()
+
+            if result.get('code') == 200:
+                logger.info(f"PushPlus推送成功: {result.get('msg', '')}")
+                return {
+                    'success': True,
+                    'message': 'PushPlus推送成功',
+                    'details': result
+                }
+            else:
+                error_msg = result.get('msg', '未知错误')
+                logger.error(f"PushPlus推送失败: {error_msg}")
+                return {
+                    'success': False,
+                    'message': f'PushPlus推送失败: {error_msg}',
+                    'details': result
+                }
+
+        except requests.RequestException as e:
+            logger.error(f"PushPlus网络请求失败: {e}")
+            return {
+                'success': False,
+                'message': f'网络请求失败: {str(e)}',
+                'details': {}
+            }
+        except Exception as e:
+            logger.error(f"PushPlus推送时发生异常: {e}")
+            return {
+                'success': False,
+                'message': f'推送异常: {str(e)}',
+                'details': {}
+            }
+
     def test_connection(self) -> Dict[str, Any]:
         """测试PushPlus连接"""
         try:

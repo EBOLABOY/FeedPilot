@@ -9,6 +9,7 @@ import time
 import schedule
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 # 添加src目录到路径
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -19,7 +20,7 @@ from src.rss.fetcher import RSSFetcher
 from src.rss.parser import RSSParser
 from src.pushers.pushplus import PushPlusPusher
 from src.db.storage import PushStorage
-from src.ai.scorer import AIContentScorer
+from src.ai.content_enhancer import ContentEnhancer
 
 
 class RSSPushService:
@@ -50,11 +51,11 @@ class RSSPushService:
         # 数据库存储
         self.storage = PushStorage(self.db_config.get('path', 'data/pushed_items.db'))
 
-        # AI内容筛选器
-        ai_config = self.config.get('ai_filter', {})
-        self.ai_scorer = AIContentScorer(ai_config)
-        if ai_config.get('enabled', False):
-            self.logger.info(f"AI内容筛选器已启用: {self.ai_scorer}")
+        # 内容增强器
+        enhancer_config = self.config.get('content_enhancer', {})
+        self.content_enhancer = ContentEnhancer(enhancer_config)
+        if enhancer_config.get('enabled', False):
+            self.logger.info(f"内容增强器已启用: {self.content_enhancer}")
 
         # 推送器
         self.pushers = self._init_pushers()
@@ -159,16 +160,6 @@ class RSSPushService:
 
             self.logger.info(f"发现 {len(unpushed_items)} 个未推送条目")
 
-            # 4.5. AI筛选和排序
-            self.logger.info("开始AI内容筛选和评分...")
-            unpushed_items = self.ai_scorer.filter_and_rank(unpushed_items)
-
-            if not unpushed_items:
-                self.logger.info("AI筛选后没有符合要求的内容")
-                return
-
-            self.logger.info(f"AI筛选后剩余 {len(unpushed_items)} 个高质量条目")
-
             # 5. 实际推送的条目(可能受max_items限制)
             pushplus_config = self.config.get_pushplus_config()
             max_items = pushplus_config.get('message_template', {}).get('max_items', 20)
@@ -179,10 +170,25 @@ class RSSPushService:
                 items_to_push = unpushed_items
                 self.logger.info(f"准备推送全部 {len(items_to_push)} 条未推送内容")
 
-            # 6. 推送到各个推送器
+            # 6. 内容增强（可选，使用专业提示词进行深度分析）
+            enhanced_content = None
+            if self.content_enhancer.enabled:
+                self.logger.info("开始内容增强分析...")
+                enhanced_content = self.content_enhancer.enhance_content(items_to_push)
+
+                if enhanced_content:
+                    self.logger.info("内容增强完成，将推送增强后的内容")
+                else:
+                    self.logger.warning("内容增强失败，将推送原始内容")
+
+            # 7. 推送到各个推送器
             for pusher_name, pusher in self.pushers.items():
                 try:
-                    result = pusher.push_items(items_to_push)
+                    # 如果有增强内容，使用增强内容；否则使用原始条目
+                    if enhanced_content:
+                        result = self._push_enhanced_content(pusher, enhanced_content, items_to_push)
+                    else:
+                        result = pusher.push_items(items_to_push)
 
                     if result['success']:
                         self.logger.info(f"推送成功 - {pusher_name}: {result['message']}")
@@ -284,6 +290,34 @@ class RSSPushService:
         print(f"本周推送: {stats.get('week_count', 0)}")
         print(f"最后推送时间: {stats.get('last_pushed', '无')}")
         print("="*60 + "\n")
+
+    def _push_enhanced_content(self, pusher, enhanced_content: str, items: List) -> dict:
+        """
+        推送增强后的内容
+        :param pusher: 推送器实例
+        :param enhanced_content: 增强后的Markdown内容
+        :param items: 原始RSS条目（用于记录）
+        :return: 推送结果
+        """
+        try:
+            # 使用PushPlus的自定义消息推送
+            if hasattr(pusher, 'push_custom_message'):
+                return pusher.push_custom_message(
+                    title="📚 教师招聘考试备考推送",
+                    content=enhanced_content,
+                    template="markdown"  # 使用markdown格式
+                )
+            else:
+                # 如果推送器不支持自定义消息，降级为普通推送
+                self.logger.warning(f"推送器不支持自定义消息，使用标准格式")
+                return pusher.push_items(items)
+
+        except Exception as e:
+            self.logger.error(f"推送增强内容失败: {e}")
+            return {
+                'success': False,
+                'message': f"推送失败: {str(e)}"
+            }
 
     def cleanup(self):
         """清理资源"""
