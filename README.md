@@ -5,6 +5,7 @@
 ## 功能特性
 
 - ✅ 自动抓取RSS订阅源
+- ✅ **两阶段AI智能筛选** (快速打分→全文分析)
 - ✅ 智能过滤未推送内容(数据库去重)
 - ✅ 去重和排序处理
 - ✅ 推送到PushPlus群组
@@ -16,6 +17,8 @@
 
 **核心机制:** 不按日期过滤,推送所有RSS源中未推送的内容,数据库自动防止重复推送。
 
+**AI增强:** 支持两阶段筛选 - 先用快速模型打分筛选,再获取全文深度分析,提高准确率同时降低成本。
+
 ## 项目结构
 
 ```
@@ -25,6 +28,8 @@ RSS推送/
 ├── data/                     # 数据库存储目录
 ├── logs/                     # 日志文件目录
 ├── src/
+│   ├── ai/                  # AI内容增强
+│   │   └── content_enhancer.py
 │   ├── config/              # 配置管理
 │   │   └── loader.py
 │   ├── db/                  # 数据库存储
@@ -38,7 +43,10 @@ RSS推送/
 │   │   ├── fetcher.py
 │   │   └── parser.py
 │   └── utils/               # 工具函数
+│       ├── content_fetcher.py  # 网页内容抓取
 │       └── logger.py
+├── .env                     # 环境变量(需自行创建)
+├── 系统提示词.md            # AI分析系统提示词
 ├── main.py                  # 主程序入口
 └── requirements.txt         # Python依赖
 
@@ -52,24 +60,60 @@ pip install -r requirements.txt
 
 ## 配置说明
 
+### 1. 创建环境变量文件
+
+复制 `.env.example` 为 `.env` 并配置:
+
+```bash
+# ========== 阶段1: 初筛模型配置 ==========
+# 用于快速筛选RSS条目(仅基于标题+摘要)
+STAGE1_API_BASE=http://your-api-base/v1
+STAGE1_API_KEY=your-api-key
+STAGE1_MODEL=gemini-1.5-flash  # 建议使用快速便宜的模型
+STAGE1_SCORE_THRESHOLD=7  # 初筛分数阈值(7-10分的文章进入第二阶段)
+
+# ========== 阶段2: 深度分析模型配置 ==========
+# 用于深度分析全文内容
+STAGE2_API_BASE=http://your-api-base/v1
+STAGE2_API_KEY=your-api-key
+STAGE2_MODEL=gemini-2.5-pro  # 建议使用强大的模型
+
+# ========== 两阶段筛选配置 ==========
+ENABLE_TWO_STAGE=true  # 是否启用两阶段筛选
+ENABLE_FULL_TEXT=true  # 是否获取全文
+
+# 定时推送时间
+DAILY_PUSH_TIME=07:30
+```
+
+### 2. 编辑配置文件
+
 编辑 `config/app.yaml` 文件:
 
 ```yaml
 # RSS订阅源配置
 rss:
   url: "http://your-rss-feed-url/feed.rss"
-  fetch_interval: 5  # 每5分钟检查一次
 
 # PushPlus配置
 pushplus:
   token: "your-pushplus-token"      # 你的PushPlus Token
   topic: "66"                        # 群组编号
   message_template:
-    max_items: 5                     # 一次推送最多几条新闻
+    max_items: 20                    # 一次推送最多几条新闻
     include_description: true        # 是否包含描述
-    include_image: true              # 是否包含图片
-    template: "html"                 # 消息格式: html, markdown, txt
+    include_image: false             # 是否包含图片
+    template: "markdown"             # 消息格式: html, markdown, txt
+
+# 内容增强配置(两阶段筛选)
+content_enhancer:
+  enabled: true                      # 是否启用AI内容增强
+  provider: "openai"                 # openai 或 claude
 ```
+
+### 3. 配置系统提示词(可选)
+
+编辑 `系统提示词.md` 文件来自定义AI分析规则,详见 `内容增强使用指南.md`。
 
 ## 使用方法
 

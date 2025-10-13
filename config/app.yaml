@@ -42,15 +42,21 @@ database:
   type: "sqlite"
   path: "data/pushed_items.db"
 
-# 内容增强配置（使用专业提示词进行深度分析）
+# 内容增强配置（支持两阶段筛选）
 content_enhancer:
-  enabled: true  # 是否启用内容增强（需要消耗更多API token）
+  enabled: true  # 是否启用内容增强
   provider: "openai"  # openai 或 claude
-  # API配置优先从.env文件读取(AI_API_KEY, AI_API_BASE, AI_MODEL)
-  # 也可以在这里直接配置(不推荐)
-  # api_key: ""
-  # api_base: ""
-  # model: ""
+
+  # 两阶段筛选说明:
+  # - 阶段1: 使用快速模型对标题+摘要打分(1-10分)
+  # - 阶段2: 对高分文章获取全文,用强大模型深度分析
+  #
+  # 配置优先从.env文件读取:
+  # - ENABLE_TWO_STAGE=true/false (是否启用两阶段)
+  # - ENABLE_FULL_TEXT=true/false (是否获取全文)
+  # - STAGE1_API_KEY, STAGE1_API_BASE, STAGE1_MODEL
+  # - STAGE2_API_KEY, STAGE2_API_BASE, STAGE2_MODEL
+  # - STAGE1_SCORE_THRESHOLD (初筛分数阈值,默认7分)
 
 # 调度配置
 scheduler:
@@ -58,4 +64,4 @@ scheduler:
   timezone: "Asia/Shanghai"
   # 每天定时执行
   schedule_type: "daily"  # daily: 每天执行, interval: 按间隔执行
-  daily_time: "07:30"     # 每天执行的时间(HH:MM格式)
+  daily_time: "07:30"     # 每天执行的时间(HH:MM格式) - 可通过环境变量DAILY_PUSH_TIME覆盖

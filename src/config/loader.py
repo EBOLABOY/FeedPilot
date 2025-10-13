@@ -1,4 +1,5 @@
 import yaml
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from ..utils.logger import get_logger
@@ -80,8 +81,16 @@ class ConfigLoader:
         return self.get('database', {})
 
     def get_scheduler_config(self) -> Dict[str, Any]:
-        """获取调度器配置"""
-        return self.get('scheduler', {})
+        """获取调度器配置,支持从环境变量读取推送时间"""
+        config = self.get('scheduler', {})
+
+        # 如果环境变量中设置了推送时间,优先使用环境变量
+        env_push_time = os.getenv('DAILY_PUSH_TIME')
+        if env_push_time:
+            config['daily_time'] = env_push_time
+            logger.info(f"从环境变量读取推送时间: {env_push_time}")
+
+        return config
 
     def get_enabled_pushers(self) -> list:
         """获取启用的推送器列表"""

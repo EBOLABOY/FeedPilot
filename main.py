@@ -160,55 +160,74 @@ class RSSPushService:
 
             self.logger.info(f"发现 {len(unpushed_items)} 个未推送条目")
 
-            # 5. 实际推送的条目(可能受max_items限制)
-            pushplus_config = self.config.get_pushplus_config()
-            max_items = pushplus_config.get('message_template', {}).get('max_items', 20)
-            if max_items > 0 and len(unpushed_items) > max_items:
-                items_to_push = unpushed_items[:max_items]
-                self.logger.info(f"因单次推送限制,本次只推送前 {max_items} 条,剩余 {len(unpushed_items) - max_items} 条将在下次推送")
-            else:
-                items_to_push = unpushed_items
-                self.logger.info(f"准备推送全部 {len(items_to_push)} 条未推送内容")
-
-            # 6. 内容增强（可选，使用专业提示词进行深度分析）
+            # 5. 内容增强（对所有未推送条目进行AI分析）
             enhanced_content = None
             if self.content_enhancer.enabled:
-                self.logger.info("开始内容增强分析...")
-                enhanced_content = self.content_enhancer.enhance_content(items_to_push)
+                self.logger.info(f"开始对全部 {len(unpushed_items)} 条内容进行AI增强分析...")
+                enhanced_content = self.content_enhancer.enhance_content(unpushed_items)
 
                 if enhanced_content:
-                    self.logger.info("内容增强完成，将推送增强后的内容")
+                    self.logger.info("AI内容增强完成")
                 else:
-                    self.logger.warning("内容增强失败，将推送原始内容")
+                    self.logger.warning("AI内容增强失败，将推送原始内容")
 
-            # 7. 推送到各个推送器
-            for pusher_name, pusher in self.pushers.items():
-                try:
-                    # 如果有增强内容，使用增强内容；否则使用原始条目
-                    if enhanced_content:
-                        result = self._push_enhanced_content(pusher, enhanced_content, items_to_push)
-                    else:
-                        result = pusher.push_items(items_to_push)
+            # 6. 分批推送（每次推送max_items条）
+            pushplus_config = self.config.get_pushplus_config()
+            max_items = pushplus_config.get('message_template', {}).get('max_items', 20)
 
-                    if result['success']:
-                        self.logger.info(f"推送成功 - {pusher_name}: {result['message']}")
-                        # 只标记实际推送的条目为已推送
-                        self.storage.mark_items_as_pushed(
-                            items_to_push,
-                            pusher_name=pusher_name,
-                            success=True
-                        )
-                    else:
-                        self.logger.error(f"推送失败 - {pusher_name}: {result['message']}")
-                        # 推送失败不标记,下次继续尝试
-                        # self.storage.mark_items_as_pushed(
-                        #     items_to_push,
-                        #     pusher_name=pusher_name,
-                        #     success=False
-                        # )
+            # 如果启用了AI增强且分析成功，推送AI增强内容（一次性推送所有）
+            if enhanced_content:
+                self.logger.info("推送AI增强后的内容...")
+                for pusher_name, pusher in self.pushers.items():
+                    try:
+                        result = self._push_enhanced_content(pusher, enhanced_content, unpushed_items)
 
-                except Exception as e:
-                    self.logger.error(f"推送器 {pusher_name} 执行时发生异常: {e}")
+                        if result['success']:
+                            self.logger.info(f"推送成功 - {pusher_name}: {result['message']}")
+                            # 标记所有条目为已推送
+                            self.storage.mark_items_as_pushed(
+                                unpushed_items,
+                                pusher_name=pusher_name,
+                                success=True
+                            )
+                        else:
+                            self.logger.error(f"推送失败 - {pusher_name}: {result['message']}")
+                    except Exception as e:
+                        self.logger.error(f"推送器 {pusher_name} 执行时发生异常: {e}")
+            else:
+                # 未启用AI或AI失败，分批推送原始内容
+                total_items = len(unpushed_items)
+                batch_count = (total_items + max_items - 1) // max_items  # 向上取整
+
+                self.logger.info(f"将分 {batch_count} 批推送,每批最多 {max_items} 条")
+
+                for batch_idx in range(batch_count):
+                    start_idx = batch_idx * max_items
+                    end_idx = min(start_idx + max_items, total_items)
+                    items_batch = unpushed_items[start_idx:end_idx]
+
+                    self.logger.info(f"正在推送第 {batch_idx + 1}/{batch_count} 批 ({len(items_batch)} 条)...")
+
+                    for pusher_name, pusher in self.pushers.items():
+                        try:
+                            result = pusher.push_items(items_batch)
+
+                            if result['success']:
+                                self.logger.info(f"第 {batch_idx + 1} 批推送成功 - {pusher_name}")
+                                self.storage.mark_items_as_pushed(
+                                    items_batch,
+                                    pusher_name=pusher_name,
+                                    success=True
+                                )
+                            else:
+                                self.logger.error(f"第 {batch_idx + 1} 批推送失败 - {pusher_name}: {result['message']}")
+                        except Exception as e:
+                            self.logger.error(f"推送器 {pusher_name} 执行第 {batch_idx + 1} 批时发生异常: {e}")
+
+                    # 批次之间稍作延迟,避免频繁请求
+                    if batch_idx < batch_count - 1:
+                        self.logger.info("等待2秒后推送下一批...")
+                        time.sleep(2)
 
             # 6. 显示统计信息
             stats = self.storage.get_statistics()
