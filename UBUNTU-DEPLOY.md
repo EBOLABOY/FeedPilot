@@ -67,6 +67,21 @@ AI_API_KEY=your-actual-api-key-here
 
 其他配置保持默认即可。按 `Ctrl+X`, 然后 `Y`, 然后 `Enter` 保存退出。
 
+### 步骤3.5: 登录Docker Hub（避免速率限制）
+
+```bash
+# 登录Docker Hub以提高拉取限额
+docker login
+
+# 或使用脚本
+bash scripts/docker-login.sh
+```
+
+**为什么需要登录？**
+- Docker Hub限制匿名用户: 100次拉取/6小时
+- 登录后提升至: 200次拉取/6小时
+- 详细说明: [docs/DOCKER-RATELIMIT.md](docs/DOCKER-RATELIMIT.md)
+
 ### 步骤4: 启动服务
 
 ```bash
@@ -196,7 +211,26 @@ tar -czf feedpilot-backup-$(date +%Y%m%d).tar.gz \
 
 ## 🔥 故障排查
 
-### 问题1: 容器无法启动
+### 问题1: Docker Hub速率限制
+```
+Error: 429 Too Many Requests
+```
+
+**解决方案**:
+```bash
+# 方案1: 登录Docker Hub（推荐）
+docker login
+
+# 方案2: 先拉取基础镜像
+docker pull python:3.11-slim
+
+# 方案3: 使用重试脚本
+bash scripts/build-retry.sh
+```
+
+详细说明: [docs/DOCKER-RATELIMIT.md](docs/DOCKER-RATELIMIT.md)
+
+### 问题2: 容器无法启动
 ```bash
 # 查看详细日志
 docker-compose logs
