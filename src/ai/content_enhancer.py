@@ -49,8 +49,9 @@ class ContentEnhancer:
         # 内容抓取器
         self.content_fetcher = ContentFetcher() if self.enable_full_text else None
 
-        # 加载系统提示词
-        self.system_prompt = self._load_system_prompt()
+        # 加载系统提示词 (两个阶段分别加载)
+        self.stage1_prompt = self._load_stage_prompt(1) if self.enable_two_stage else None
+        self.stage2_prompt = self._load_stage_prompt(2)
 
         if self.enabled:
             if self.enable_two_stage:
@@ -60,25 +61,28 @@ class ContentEnhancer:
         elif self.enabled and not self.api_key:
             logger.warning("内容增强器已启用但未配置API密钥")
 
-    def _load_system_prompt(self) -> str:
-        """加载系统提示词"""
-        prompt_file = Path(__file__).parent.parent.parent / '系统提示词.md'
+    def _load_stage_prompt(self, stage: int) -> str:
+        """加载指定阶段的系统提示词"""
+        prompt_file = Path(__file__).parent.parent.parent / f'阶段{stage}提示词.md'
 
         if prompt_file.exists():
             try:
                 with open(prompt_file, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
-                    logger.info(f"已加载系统提示词: {prompt_file}")
+                    logger.info(f"已加载阶段{stage}提示词: {prompt_file}")
                     return content
             except Exception as e:
-                logger.error(f"加载系统提示词失败: {e}")
+                logger.error(f"加载阶段{stage}提示词失败: {e}")
 
-        logger.warning("未找到系统提示词文件，使用默认提示词")
-        return self._get_default_prompt()
+        logger.warning(f"未找到阶段{stage}提示词文件，使用默认提示词")
+        return self._get_default_prompt(stage)
 
-    def _get_default_prompt(self) -> str:
+    def _get_default_prompt(self, stage: int = 2) -> str:
         """默认提示词（简化版）"""
-        return """你是一名教育内容分析专家。请分析RSS文章并按重要性分类：
+        if stage == 1:
+            return "你是教育领域专家，帮助筛选与深圳小学教师招聘考试备考相关的文章。"
+        else:
+            return """你是一名教育内容分析专家。请分析RSS文章并按重要性分类：
 - 核心必读 (★★★★★): 紧扣宏观教育政策、前沿理念
 - 重点阅读 (★★★★☆): 实用的教学方法、案例
 - 拓展阅读 (★★★☆☆): 理论知识、名家观点
@@ -171,43 +175,42 @@ class ContentEnhancer:
         :return: 相关性判断列表(1=相关需深度分析, 0=不相关可忽略)
         """
         # 构建文章列表
-        rss_summary = "以下是RSS订阅内容,请根据你的专业知识判断每篇文章的相关性:\n\n"
+        rss_summary = "以下是RSS订阅内容:\n\n"
 
         for i, item in enumerate(items, 1):
             rss_summary += f"【文章{i}】\n"
             rss_summary += f"标题: {item.title}\n"
-            description = item.get_excerpt(300)  # 增加摘要长度
+            description = item.get_excerpt(300)
             if description:
                 rss_summary += f"摘要: {description}\n"
-            rss_summary += f"链接: {item.link}\n\n"
+            rss_summary += "\n"
 
-        # 构建阶段1筛选提示
+        # 构建阶段1筛选提示 - 简化版，不使用系统提示词
         stage1_prompt = f"""{rss_summary}
 
-请根据上述文章的标题和摘要,判断每篇文章是否值得深入阅读。
+请判断每篇文章是否值得深入阅读。
 
-请以JSON格式返回判断结果:
-```json
+**必须严格按照以下JSON格式返回，不要添加任何额外文字：**
+
 {{
   "relevant": [1, 0, 1, 0, ...],
-  "reason": ["相关原因", "不相关原因", ...]
+  "reason": ["相关", "不相关", ...]
 }}
-```
 
 说明:
-- relevant数组: 1=相关需深度分析, 0=不相关可忽略
-- reason数组: 简短说明判断原因(10字以内)
-- 数组长度必须等于文章数量({len(items)}篇)
+- relevant数组: 1=相关, 0=不相关
+- reason数组: 简短说明(10字以内)
+- 数组长度必须等于{len(items)}
 """
 
-        # 调用阶段1 API (使用系统提示词)
+        # 调用阶段1 API (使用阶段1提示词)
         try:
             response = self._call_ai_with_config(
                 prompt=stage1_prompt,
                 api_key=self.api_key,
                 api_base=self.api_base,
                 model=self.stage1_model,
-                system_prompt=self.system_prompt  # 使用系统提示词!
+                system_prompt=self.stage1_prompt  # 使用阶段1提示词
             )
 
             if not response:
@@ -249,13 +252,13 @@ class ContentEnhancer:
         # 构建RSS内容摘要
         rss_summary = self._build_rss_summary(items, include_full_text=True)
 
-        # 调用阶段2 API
+        # 调用阶段2 API (使用阶段2提示词)
         ai_response = self._call_ai_with_config(
             prompt=rss_summary,
             api_key=self.api_key,
             api_base=self.api_base,
             model=self.stage2_model,
-            system_prompt=self.system_prompt
+            system_prompt=self.stage2_prompt  # 使用阶段2提示词
         )
 
         if not ai_response:
@@ -362,18 +365,26 @@ class ContentEnhancer:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
-            # 调用API
+            # 调用API (Gemini有1M上下文,不限制max_tokens)
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.3,
-                max_tokens=8000
+                temperature=0.3
+                # 不设置max_tokens,让模型自由生成
             )
+
+            # 调试：打印完整响应
+            logger.debug(f"API响应对象: {response}")
 
             content = response.choices[0].message.content
 
             if not content:
                 logger.error("AI返回的content为空")
+                logger.error(f"完整响应: {response}")
+                logger.error(f"choices: {response.choices}")
+                if response.choices:
+                    logger.error(f"第一个choice: {response.choices[0]}")
+                    logger.error(f"message: {response.choices[0].message}")
                 return None
 
             content = content.strip()
@@ -437,6 +448,7 @@ class ContentEnhancer:
         except json.JSONDecodeError:
             # 如果失败，尝试提取JSON部分
             logger.warning("JSON解析失败，尝试提取JSON内容")
+            logger.debug(f"原始响应内容（前500字符）: {response[:500]}")
 
             # 尝试提取 ```json ... ``` 中的内容
             json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
@@ -454,7 +466,8 @@ class ContentEnhancer:
                 except json.JSONDecodeError:
                     pass
 
-            logger.error(f"无法从响应中提取有效JSON: {response[:200]}...")
+            logger.error(f"无法从响应中提取有效JSON")
+            logger.error(f"响应内容（前1000字符）: {response[:1000]}")
             return None
 
     def _format_beautiful_markdown(self, data: Dict, items: List[RSSItem]) -> str:

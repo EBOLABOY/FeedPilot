@@ -32,7 +32,7 @@ pushplus:
 
 # 日志配置
 logging:
-  level: "INFO"
+  level: "INFO"  # INFO级别即可
   file: "logs/app.log"
   max_size: "10MB"
   backup_count: 5

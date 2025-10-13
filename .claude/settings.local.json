@@ -3,7 +3,14 @@
     "allow": [
       "Bash(python:*)",
       "Bash(rm:*)",
-      "Bash(iconv:*)"
+      "Bash(iconv:*)",
+      "Bash(pip install:*)",
+      "Bash(if exist \"data\\pushed_items.db\" del /f \"data\\pushed_items.db\")",
+      "Bash(taskkill:*)",
+      "Bash(dir:*)",
+      "Bash(awk:*)",
+      "Bash(chmod:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

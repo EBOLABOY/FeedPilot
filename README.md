@@ -115,42 +115,67 @@ content_enhancer:
 
 编辑 `系统提示词.md` 文件来自定义AI分析规则,详见 `内容增强使用指南.md`。
 
-## 使用方法
+## 快速开始
 
-### 1. 启动定时服务(推荐)
+### 方式1: Docker部署（推荐）
 
+```bash
+# 1. 复制环境变量配置
+cp .env.docker.example .env
+
+# 2. 编辑.env文件，填入API密钥
+vim .env
+
+# 3. 启动服务
+docker-compose up -d
+
+# 4. 查看日志
+docker-compose logs -f
+```
+
+详细说明请查看 [Docker部署指南](DOCKER.md)
+
+### 方式2: 本地运行
+
+#### 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+#### 启动定时服务
 ```bash
 python main.py
 ```
 
 服务将按配置的时间间隔自动抓取并推送。
 
-### 2. 仅执行一次
+## 常用命令
 
+### 仅执行一次
 ```bash
 python main.py --once
+# Docker: docker-compose exec feedpilot python main.py --once
 ```
 
-### 3. 测试推送器连接
-
+### 测试推送器连接
 ```bash
 python main.py --test
+# Docker: docker-compose exec feedpilot python main.py --test
 ```
 
-### 4. 查看推送统计
-
+### 查看推送统计
 ```bash
 python main.py --stats
+# Docker: docker-compose exec feedpilot python main.py --stats
 ```
 
-### 5. 清理旧记录
-
+### 清理旧记录
 ```bash
 python main.py --cleanup 30  # 清理30天前的记录
+# Docker: docker-compose exec feedpilot python main.py --cleanup 30
 ```
 
-### 6. 使用自定义配置文件
-
+### 使用自定义配置文件
 ```bash
 python main.py --config /path/to/config.yaml
 ```
@@ -226,19 +251,23 @@ database:
 
 ### 5. 如何部署为后台服务?
 
+**推荐方式: Docker部署**
+详见 [Docker部署指南](DOCKER.md)
+
 **Linux (使用systemd):**
-创建 `/etc/systemd/system/rss-push.service`:
+创建 `/etc/systemd/system/feedpilot.service`:
 ```ini
 [Unit]
-Description=RSS Push Service
+Description=FeedPilot RSS Push Service
 After=network.target
 
 [Service]
 Type=simple
 User=your-user
-WorkingDirectory=/path/to/RSS推送
-ExecStart=/usr/bin/python3 /path/to/RSS推送/main.py
+WorkingDirectory=/opt/feedpilot
+ExecStart=/usr/bin/python3 /opt/feedpilot/main.py
 Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -246,16 +275,9 @@ WantedBy=multi-user.target
 
 启动服务:
 ```bash
-sudo systemctl enable rss-push
-sudo systemctl start rss-push
-```
-
-**Windows (使用nssm):**
-1. 下载 [NSSM](https://nssm.cc/download)
-2. 以管理员身份运行:
-```cmd
-nssm install RSSPush "python" "C:\path\to\RSS推送\main.py"
-nssm start RSSPush
+sudo systemctl enable feedpilot
+sudo systemctl start feedpilot
+sudo systemctl status feedpilot
 ```
 
 ## 开发与扩展

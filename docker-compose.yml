@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  feedpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: feedpilot
+    restart: unless-stopped
+
+    # 环境变量配置
+    environment:
+      # AI配置
+      - AI_API_KEY=${AI_API_KEY}
+      - AI_API_BASE=${AI_API_BASE:-http://154.19.184.12:3000/v1}
+
+      # 两阶段筛选配置
+      - ENABLE_TWO_STAGE=${ENABLE_TWO_STAGE:-true}
+      - ENABLE_FULL_TEXT=${ENABLE_FULL_TEXT:-true}
+      - STAGE1_MODEL=${STAGE1_MODEL:-gemini-2.5-flash}
+      - STAGE2_MODEL=${STAGE2_MODEL:-gemini-2.5-pro}
+      - STAGE1_SCORE_THRESHOLD=${STAGE1_SCORE_THRESHOLD:-7}
+
+      # 推送时间配置(可选，覆盖app.yaml中的设置)
+      - DAILY_PUSH_TIME=${DAILY_PUSH_TIME:-07:30}
+
+      # 时区
+      - TZ=Asia/Shanghai
+
+    # 挂载卷
+    volumes:
+      # 数据持久化
+      - ./data:/app/data
+      # 日志持久化
+      - ./logs:/app/logs
+      # 配置文件(如需修改配置，可取消注释)
+      - ./config:/app/config
+      # 提示词文件(如需修改提示词，可取消注释)
+      - ./阶段1提示词.md:/app/阶段1提示词.md
+      - ./阶段2提示词.md:/app/阶段2提示词.md
+
+    # 资源限制(可选)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+    # 网络(如果需要访问其他服务)
+    # networks:
+    #   - feedpilot_network
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# 网络配置(如果需要)
+# networks:
+#   feedpilot_network:
+#     driver: bridge
