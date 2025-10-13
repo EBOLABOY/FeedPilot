@@ -117,7 +117,28 @@ content_enhancer:
 
 ## 快速开始
 
-### 方式1: Docker部署（推荐）
+### 方式1: Python直接部署（最简单，无需Docker）
+
+```bash
+# 快速修复并部署（自动安装依赖）
+sudo bash scripts/quickfix-deploy.sh
+
+# 或手动安装依赖
+sudo apt install -y python3-venv python3-pip
+bash scripts/deploy-python.sh
+
+# 配置systemd服务（后台运行）
+sudo bash scripts/setup-systemd.sh
+```
+
+### 方式2: Docker镜像站部署（推荐，解决速率限制）
+
+```bash
+# 使用阿里云等镜像站，无需Docker Hub账户
+bash scripts/deploy-docker-mirror.sh
+```
+
+### 方式3: Docker标准部署
 
 ```bash
 # 1. 复制环境变量配置
@@ -126,28 +147,20 @@ cp .env.docker.example .env
 # 2. 编辑.env文件，填入API密钥
 vim .env
 
-# 3. 启动服务
+# 3. 登录Docker Hub（避免速率限制）
+docker login
+
+# 4. 启动服务
 docker-compose up -d
 
-# 4. 查看日志
+# 5. 查看日志
 docker-compose logs -f
 ```
 
-详细说明请查看 [Docker部署指南](DOCKER.md)
-
-### 方式2: 本地运行
-
-#### 安装依赖
-```bash
-pip install -r requirements.txt
-```
-
-#### 启动定时服务
-```bash
-python main.py
-```
-
-服务将按配置的时间间隔自动抓取并推送。
+详细说明请查看：
+- [Docker部署指南](DOCKER.md)
+- [Ubuntu部署指南](UBUNTU-DEPLOY.md)
+- [速率限制解决方案](docs/RATELIMIT-QUICKFIX.md)
 
 ## 常用命令
 

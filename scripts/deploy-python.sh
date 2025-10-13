@@ -20,6 +20,34 @@ PYTHON_VERSION=$(python3 --version | awk '{print $2}')
 echo "✅ Python版本: $PYTHON_VERSION"
 echo ""
 
+# 检查并安装必要的系统包
+echo "🔍 检查系统依赖..."
+if ! dpkg -l | grep -q python3-venv; then
+    echo "📦 安装 python3-venv..."
+    if [ "$EUID" -eq 0 ]; then
+        apt update -qq
+        apt install -y python3-venv python3-pip
+    else
+        echo "需要root权限安装依赖，请执行:"
+        echo "  sudo apt update"
+        echo "  sudo apt install -y python3-venv python3-pip"
+        echo ""
+        read -p "是否现在使用sudo安装？(y/n) " -n 1 -r
+        echo ""
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            sudo apt update -qq
+            sudo apt install -y python3-venv python3-pip
+        else
+            echo "❌ 缺少必要依赖，退出部署"
+            exit 1
+        fi
+    fi
+    echo "✅ 系统依赖安装完成"
+else
+    echo "✅ 系统依赖已满足"
+fi
+echo ""
+
 # 创建虚拟环境
 if [ ! -d "venv" ]; then
     echo "📦 创建Python虚拟环境..."

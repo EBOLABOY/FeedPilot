@@ -1,10 +1,27 @@
 # 🚀 FeedPilot 快速命令参考
 
-## 一键部署
+## 部署方式
 
+### 方式1: Python直接部署（最简单）
 ```bash
-# 在Ubuntu服务器上执行
-curl -fsSL https://get.docker.com | sh
+# 快速修复并部署
+sudo bash scripts/quickfix-deploy.sh
+
+# 或手动部署
+sudo apt install -y python3-venv python3-pip
+bash scripts/deploy-python.sh
+```
+
+### 方式2: Docker镜像站部署（推荐）
+```bash
+# 使用阿里云等镜像站，无需Docker Hub
+bash scripts/deploy-docker-mirror.sh
+```
+
+### 方式3: Docker标准部署
+```bash
+# 需要先登录Docker Hub
+docker login
 docker-compose up -d
 ```
 
