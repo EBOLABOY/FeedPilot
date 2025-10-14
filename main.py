@@ -254,14 +254,25 @@ class RSSPushService:
         schedule_type = scheduler_config.get('schedule_type', 'interval')
 
         if schedule_type == 'daily':
-            # 每天定时执行
-            daily_time = scheduler_config.get('daily_time', '07:30')
-            self.logger.info(f"启动定时调度器,每天 {daily_time} 执行一次")
+            # 每天定时执行,支持多个时间点
+            # 优先检查daily_times(多时间点),其次daily_time(单时间点)
+            daily_times = scheduler_config.get('daily_times')
+            if daily_times and isinstance(daily_times, list):
+                # 多个推送时间点
+                self.logger.info(f"启动定时调度器,每天在 {', '.join(daily_times)} 执行")
 
-            # 设置定时任务
-            schedule.every().day.at(daily_time).do(self.fetch_and_push)
+                for time_point in daily_times:
+                    schedule.every().day.at(time_point).do(self.fetch_and_push)
+                    self.logger.info(f"已设置定时任务: 每天 {time_point}")
 
-            self.logger.info(f"下次执行时间: {daily_time}")
+                self.logger.info(f"共设置 {len(daily_times)} 个每日推送时间点")
+            else:
+                # 单个推送时间点(向后兼容)
+                daily_time = scheduler_config.get('daily_time', '07:30')
+                self.logger.info(f"启动定时调度器,每天 {daily_time} 执行一次")
+                schedule.every().day.at(daily_time).do(self.fetch_and_push)
+                self.logger.info(f"下次执行时间: {daily_time}")
+
             self.logger.info("等待定时任务触发...")
 
         else:
@@ -322,7 +333,7 @@ class RSSPushService:
             # 使用PushPlus的自定义消息推送
             if hasattr(pusher, 'push_custom_message'):
                 return pusher.push_custom_message(
-                    title="📚 教师招聘考试备考推送",
+                    title="📚 深圳教师社招主观热点素材",
                     content=enhanced_content,
                     template="markdown"  # 使用markdown格式
                 )

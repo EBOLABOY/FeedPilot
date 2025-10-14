@@ -64,4 +64,7 @@ scheduler:
   timezone: "Asia/Shanghai"
   # 每天定时执行
   schedule_type: "daily"  # daily: 每天执行, interval: 按间隔执行
-  daily_time: "07:30"     # 每天执行的时间(HH:MM格式) - 可通过环境变量DAILY_PUSH_TIME覆盖
+  daily_time: "07:30"     # 每天执行的时间(HH:MM格式)
+  # 支持多个推送时间,可通过环境变量DAILY_PUSH_TIME覆盖:
+  # 单个时间: DAILY_PUSH_TIME=08:15
+  # 多个时间: DAILY_PUSH_TIME=08:15,18:30 (用逗号分隔)

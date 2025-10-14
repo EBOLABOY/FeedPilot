@@ -37,8 +37,14 @@ python main.py --config /path/to/config.yaml
 python debug_rss.py
 ```
 
-### Production
+### Production Deployment
 ```bash
+# Deploy with Python (recommended)
+bash scripts/deploy-python.sh
+
+# Configure as systemd service
+sudo bash scripts/setup-systemd.sh
+
 # Start scheduled service (runs continuously)
 python main.py
 ```

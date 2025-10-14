@@ -82,7 +82,9 @@ STAGE2_MODEL=gemini-2.5-pro  # 建议使用强大的模型
 ENABLE_TWO_STAGE=true  # 是否启用两阶段筛选
 ENABLE_FULL_TEXT=true  # 是否获取全文
 
-# 定时推送时间
+# 定时推送时间 (HH:MM格式, 24小时制)
+# 单个时间: DAILY_PUSH_TIME=07:30
+# 多个时间: DAILY_PUSH_TIME=08:15,18:30 (用逗号分隔)
 DAILY_PUSH_TIME=07:30
 ```
 
@@ -117,7 +119,7 @@ content_enhancer:
 
 ## 快速开始
 
-### 方式1: Python直接部署（最简单，无需Docker）
+### Python直接部署
 
 ```bash
 # 快速修复并部署（自动安装依赖）
@@ -131,61 +133,29 @@ bash scripts/deploy-python.sh
 sudo bash scripts/setup-systemd.sh
 ```
 
-### 方式2: Docker镜像站部署（推荐，解决速率限制）
-
-```bash
-# 使用阿里云等镜像站，无需Docker Hub账户
-bash scripts/deploy-docker-mirror.sh
-```
-
-### 方式3: Docker标准部署
-
-```bash
-# 1. 复制环境变量配置
-cp .env.docker.example .env
-
-# 2. 编辑.env文件，填入API密钥
-vim .env
-
-# 3. 登录Docker Hub（避免速率限制）
-docker login
-
-# 4. 启动服务
-docker-compose up -d
-
-# 5. 查看日志
-docker-compose logs -f
-```
-
 详细说明请查看：
-- [Docker部署指南](DOCKER.md)
 - [Ubuntu部署指南](UBUNTU-DEPLOY.md)
-- [速率限制解决方案](docs/RATELIMIT-QUICKFIX.md)
 
 ## 常用命令
 
 ### 仅执行一次
 ```bash
 python main.py --once
-# Docker: docker-compose exec feedpilot python main.py --once
 ```
 
 ### 测试推送器连接
 ```bash
 python main.py --test
-# Docker: docker-compose exec feedpilot python main.py --test
 ```
 
 ### 查看推送统计
 ```bash
 python main.py --stats
-# Docker: docker-compose exec feedpilot python main.py --stats
 ```
 
 ### 清理旧记录
 ```bash
 python main.py --cleanup 30  # 清理30天前的记录
-# Docker: docker-compose exec feedpilot python main.py --cleanup 30
 ```
 
 ### 使用自定义配置文件
@@ -264,11 +234,14 @@ database:
 
 ### 5. 如何部署为后台服务?
 
-**推荐方式: Docker部署**
-详见 [Docker部署指南](DOCKER.md)
+**推荐方式: 使用systemd服务**
 
-**Linux (使用systemd):**
-创建 `/etc/systemd/system/feedpilot.service`:
+运行部署脚本自动配置:
+```bash
+sudo bash scripts/setup-systemd.sh
+```
+
+或手动创建 `/etc/systemd/system/feedpilot.service`:
 ```ini
 [Unit]
 Description=FeedPilot RSS Push Service

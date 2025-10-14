@@ -81,14 +81,24 @@ class ConfigLoader:
         return self.get('database', {})
 
     def get_scheduler_config(self) -> Dict[str, Any]:
-        """获取调度器配置,支持从环境变量读取推送时间"""
+        """获取调度器配置,支持从环境变量读取推送时间(支持多个时间点)"""
         config = self.get('scheduler', {})
 
         # 如果环境变量中设置了推送时间,优先使用环境变量
+        # 支持单个时间: DAILY_PUSH_TIME=08:15
+        # 支持多个时间: DAILY_PUSH_TIME=08:15,18:30
         env_push_time = os.getenv('DAILY_PUSH_TIME')
         if env_push_time:
-            config['daily_time'] = env_push_time
-            logger.info(f"从环境变量读取推送时间: {env_push_time}")
+            # 检查是否包含逗号(多个时间点)
+            if ',' in env_push_time:
+                # 解析多个时间点
+                times = [t.strip() for t in env_push_time.split(',') if t.strip()]
+                config['daily_times'] = times
+                logger.info(f"从环境变量读取多个推送时间: {times}")
+            else:
+                # 单个时间点,保持向后兼容
+                config['daily_time'] = env_push_time.strip()
+                logger.info(f"从环境变量读取推送时间: {env_push_time}")
 
         return config
 
