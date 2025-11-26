@@ -3,7 +3,8 @@
 
 # RSS订阅源配置
 rss:
-  url: "http://47.79.39.147:8001/feed/all.rss"
+  # 使用本地聚合服务提供的 Atom 源
+  url: "http://192.168.100.3:10082/atom"
   # 注意: 不再按日期过滤,而是推送所有未推送的内容,数据库会自动去重
 
 # 推送配置
@@ -26,8 +27,9 @@ pushplus:
   # 消息模板配置
   message_template:
     max_items: 20  # 一次推送最多几条新闻(建议10-20条,0表示不限制但可能超长)
-    include_description: true  # 是否包含描述
-    include_image: false  # 是否尝试添加图片(图片会增加内容长度)
+    # 下方两个开关在当前实现中不再生效,推送内容只包含标题+链接+时间
+    include_description: false  # 是否包含描述
+    include_image: false       # 是否尝试添加图片(图片会增加内容长度)
     template: "markdown"  # 消息模板: html, txt, json, markdown
 
 # 日志配置

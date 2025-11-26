@@ -120,8 +120,7 @@ class PushPlusPusher(BasePusher):
     def _format_html_message(self, items: List[RSSItem]) -> tuple:
         """格式化HTML消息"""
         template_config = self.config.get('message_template', {})
-        include_description = template_config.get('include_description', True)
-        include_image = template_config.get('include_image', False)
+        # 当前实现不再在推送中附带摘要和首图,仅展示标题+链接+时间
 
         title = f"📰 今日RSS推送 ({len(items)}条)"
 
@@ -137,15 +136,7 @@ class PushPlusPusher(BasePusher):
             html_parts.append(f'<div style="margin-bottom: 30px; padding: 15px; background: #f9f9f9; border-radius: 5px;">')
             html_parts.append(f'<h3 style="margin-top: 0; color: #2c3e50;">{i}. {item.title}</h3>')
 
-            if include_description and item.get_excerpt():
-                html_parts.append(f'<p style="color: #555; margin: 10px 0;">{item.get_excerpt(200)}</p>')
-
             html_parts.append(f'<p><a href="{item.link}" style="color: #3498db; text-decoration: none;">🔗 查看详情</a></p>')
-
-            if include_image:
-                image_url = item.extract_first_image()
-                if image_url:
-                    html_parts.append(f'<img src="{image_url}" alt="文章配图" style="max-width: 100%; height: auto; border-radius: 5px;">')
 
             if item.pub_date:
                 html_parts.append(f'<p style="color: #999; font-size: 0.9em; margin-top: 10px;">📅 {item.pub_date.strftime("%Y-%m-%d %H:%M:%S")}</p>')
@@ -164,8 +155,7 @@ class PushPlusPusher(BasePusher):
     def _format_markdown_message(self, items: List[RSSItem]) -> tuple:
         """格式化Markdown消息"""
         template_config = self.config.get('message_template', {})
-        include_description = template_config.get('include_description', True)
-        include_image = template_config.get('include_image', False)
+        # 不再在Markdown模板中展示摘要和首图
 
         title = f"📰 今日RSS推送 ({len(items)}条)"
 
@@ -174,15 +164,7 @@ class PushPlusPusher(BasePusher):
         for i, item in enumerate(items, 1):
             md_parts.append(f"\n## {i}. {item.title}\n")
 
-            if include_description and item.get_excerpt():
-                md_parts.append(f"\n{item.get_excerpt(200)}\n")
-
             md_parts.append(f"\n[🔗 查看详情]({item.link})\n")
-
-            if include_image:
-                image_url = item.extract_first_image()
-                if image_url:
-                    md_parts.append(f"\n![文章配图]({image_url})\n")
 
             if item.pub_date:
                 md_parts.append(f"\n📅 {item.pub_date.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -196,7 +178,7 @@ class PushPlusPusher(BasePusher):
     def _format_text_message(self, items: List[RSSItem]) -> tuple:
         """格式化纯文本消息"""
         template_config = self.config.get('message_template', {})
-        include_description = template_config.get('include_description', True)
+        # 文本模板同样不再附带摘要
 
         title = f"📰 今日RSS推送 ({len(items)}条)"
 
@@ -204,9 +186,6 @@ class PushPlusPusher(BasePusher):
 
         for i, item in enumerate(items, 1):
             text_parts.append(f"\n{i}. {item.title}\n")
-
-            if include_description and item.get_excerpt():
-                text_parts.append(f"📝 {item.get_excerpt(150)}\n")
 
             text_parts.append(f"🔗 {item.link}\n")
 

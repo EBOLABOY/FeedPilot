@@ -47,12 +47,10 @@ class BasePusher(ABC):
         格式化推送消息
         :param items: RSS条目列表
         :param template_config: 消息模板配置
-        :return: 格式化后的消息
+        :return: 格式化后的消息(仅包含标题+链接+时间,不再附带摘要和图片)
         """
         template_config = template_config or {}
         max_items = template_config.get('max_items', 0)
-        include_description = template_config.get('include_description', True)
-        include_image = template_config.get('include_image', True)
 
         if not items:
             return "今日暂无更新内容"
@@ -64,18 +62,11 @@ class BasePusher(ABC):
         message_parts = [f"📰 今日新闻推送 ({len(items)}条)\n"]
 
         for i, item in enumerate(items, 1):
+            # 统一仅推送标题 + 链接 + 时间, 摘要和首图由下游(如AI增强)统一处理
             message_parts.append(f"\n{i}. {item.title}")
-
-            if include_description and item.get_excerpt():
-                message_parts.append(f"   📝 {item.get_excerpt()}")
-
             message_parts.append(f"   🔗 {item.link}")
-
-            # 提取图片
-            if include_image:
-                image_url = item.extract_first_image()
-                if image_url:
-                    message_parts.append(f"   🖼️ 图片: {image_url}")
+            if item.pub_date:
+                message_parts.append(f"   📅 {item.pub_date.strftime('%Y-%m-%d %H:%M:%S')}")
 
         message_parts.append("\n---\n📅 欢迎订阅RSS推送服务")
 

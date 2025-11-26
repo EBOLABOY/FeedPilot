@@ -61,6 +61,7 @@ htmlcov/
 
 # Docker相关（不要提交.env，但保留.env.docker.example）
 !.env.docker.example
+docker-compose.yml
 
 # Claude配置
 .claude/

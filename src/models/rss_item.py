@@ -19,12 +19,29 @@ class RSSItem:
         title = entry.get('title', '')
         link = entry.get('link', '')
 
-        # 处理描述，优先使用summary，其次用description
+        # 处理描述，优先使用summary，其次用description，最后回退到Atom content
         description = ''
         if hasattr(entry, 'summary') and entry.summary:
             description = entry.summary
         elif hasattr(entry, 'description') and entry.description:
             description = entry.description
+        else:
+            # 一些Atom源(如当前参考源)将正文放在<content>中
+            # feedparser通常会提供entry.content列表,其中每个元素包含value字段
+            try:
+                content_list = getattr(entry, 'content', None)
+                if content_list:
+                    # 取第一个content作为描述来源
+                    first_content = content_list[0]
+                    # 兼容对象或dict两种形式
+                    value = getattr(first_content, 'value', None)
+                    if value is None and isinstance(first_content, dict):
+                        value = first_content.get('value')
+                    if value:
+                        description = value
+            except Exception:
+                # 为了稳健性,任何content解析异常都不影响后续流程
+                pass
 
         # 解析发布时间
         pub_date = None
