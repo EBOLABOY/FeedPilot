@@ -15,8 +15,8 @@ push:
 
   # 推送时间窗口（例如：只在9:00-18:00之间推送）
   time_window:
-    start: "09:00"
-    end: "18:00"
+    start: "00:00"
+    end: "23:00"
     enabled: false
 
 # PushPlus配置

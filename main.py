@@ -10,6 +10,7 @@ import schedule
 from datetime import datetime
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo
 
 # 添加src目录到路径
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -61,6 +62,77 @@ class RSSPushService:
         self.pushers = self._init_pushers()
 
         self.logger.info("RSS推送服务初始化完成")
+
+    def _build_daily_schedule_times(self, scheduler_config) -> list[tuple[str, str]]:
+        """
+        根据配置的调度时间与时区,构建 (配置时间, 容器本地执行时间) 列表.
+        - 配置时间: 用户在config/app.yaml或环境变量中填写的时间(默认理解为scheduler.timezone对应时区)
+        - 容器本地执行时间: 实际交给 schedule.every().day.at(...) 的时间(使用容器本地时区)
+        """
+        # 1. 先整理出“配置时间列表”(配置时区视角)
+        daily_times = scheduler_config.get('daily_times')
+        if daily_times and isinstance(daily_times, list):
+            config_times = [t.strip() for t in daily_times if t and t.strip()]
+        else:
+            # 单个时间点(向后兼容)
+            daily_time = scheduler_config.get('daily_time', '07:30')
+            config_times = [daily_time]
+
+        timezone_name = scheduler_config.get('timezone')
+        if not timezone_name:
+            # 未配置时区,直接按容器本地时间执行
+            return [(t, t) for t in config_times]
+
+        # 2. 尝试按配置时区转换到容器本地时间
+        schedule_pairs: list[tuple[str, str]] = []
+        try:
+            config_tz = ZoneInfo(timezone_name)
+        except Exception as e:  # pragma: no cover - 容错日志分支
+            self.logger.error(f"无法识别调度时区配置 scheduler.timezone='{timezone_name}', 将按容器本地时间执行: {e}")
+            return [(t, t) for t in config_times]
+
+        # 容器本地时区(可能是UTC,也可能已配置为其它时区)
+        local_tz = datetime.now().astimezone().tzinfo
+
+        for t in config_times:
+            try:
+                hour, minute = map(int, t.split(':'))
+            except ValueError:
+                self.logger.error(f"无效的调度时间格式: '{t}', 应为 HH:MM")
+                continue
+
+            # 选取“今天”的日期作为参考,只关心小时/分钟,不关心具体哪一天
+            today_in_config_tz = datetime.now(config_tz).date()
+            config_dt = datetime(
+                year=today_in_config_tz.year,
+                month=today_in_config_tz.month,
+                day=today_in_config_tz.day,
+                hour=hour,
+                minute=minute,
+                tzinfo=config_tz,
+            )
+
+            local_dt = config_dt.astimezone(local_tz)
+            local_time_str = local_dt.strftime('%H:%M')
+
+            schedule_pairs.append((t, local_time_str))
+            if t == local_time_str:
+                # 如果转换前后相同,说明容器本地时区与配置时区一致
+                self.logger.info(
+                    f"调度时间: 每天 {t} (配置时区={timezone_name}, 与容器本地时间一致)"
+                )
+            else:
+                # 记录从配置时区到容器本地时间的转换关系,便于排查
+                self.logger.info(
+                    f"调度时间转换: 配置时区 {timezone_name} 的 {t} "
+                    f"对应容器本地时间 {local_time_str}"
+                )
+
+        # 如果全部配置时间都无效,为了不影响主流程,退回到直接使用配置时间
+        if not schedule_pairs:
+            return [(t, t) for t in config_times]
+
+        return schedule_pairs
 
     def _init_pushers(self) -> dict:
         """初始化推送器"""
@@ -255,24 +327,29 @@ class RSSPushService:
 
         if schedule_type == 'daily':
             # 每天定时执行,支持多个时间点
-            # 优先检查daily_times(多时间点),其次daily_time(单时间点)
-            daily_times = scheduler_config.get('daily_times')
-            if daily_times and isinstance(daily_times, list):
-                # 多个推送时间点
-                self.logger.info(f"启动定时调度器,每天在 {', '.join(daily_times)} 执行")
+            timezone_name = scheduler_config.get('timezone', '本地时间')
 
-                for time_point in daily_times:
-                    schedule.every().day.at(time_point).do(self.fetch_and_push)
-                    self.logger.info(f"已设置定时任务: 每天 {time_point}")
+            # 计算(配置时区时间 -> 容器本地执行时间)映射
+            schedule_pairs = self._build_daily_schedule_times(scheduler_config)
+            config_times_display = [cfg for cfg, _ in schedule_pairs]
 
-                self.logger.info(f"共设置 {len(daily_times)} 个每日推送时间点")
-            else:
-                # 单个推送时间点(向后兼容)
-                daily_time = scheduler_config.get('daily_time', '07:30')
-                self.logger.info(f"启动定时调度器,每天 {daily_time} 执行一次")
-                schedule.every().day.at(daily_time).do(self.fetch_and_push)
-                self.logger.info(f"下次执行时间: {daily_time}")
+            self.logger.info(
+                f"启动定时调度器,每天在 {', '.join(config_times_display)} 执行 "
+                f"(配置时区: {timezone_name})"
+            )
 
+            for cfg_time, local_time in schedule_pairs:
+                schedule.every().day.at(local_time).do(self.fetch_and_push)
+                if cfg_time == local_time or scheduler_config.get('timezone') is None:
+                    # 未配置时区,或配置时区与容器本地时区一致
+                    self.logger.info(f"已设置定时任务: 每天 {local_time}")
+                else:
+                    self.logger.info(
+                        f"已设置定时任务: 每天 {cfg_time} (配置时区) / "
+                        f"容器本地执行时间 {local_time}"
+                    )
+
+            self.logger.info(f"共设置 {len(schedule_pairs)} 个每日推送时间点")
             self.logger.info("等待定时任务触发...")
 
         else:
