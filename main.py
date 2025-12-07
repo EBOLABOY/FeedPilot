@@ -350,6 +350,11 @@ class RSSPushService:
                     )
 
             self.logger.info(f"共设置 {len(schedule_pairs)} 个每日推送时间点")
+
+            # 启动时立即执行一次,与按间隔调度行为保持一致
+            self.logger.info("服务启动后立即执行一次RSS抓取和推送任务")
+            self.fetch_and_push()
+
             self.logger.info("等待定时任务触发...")
 
         else:
