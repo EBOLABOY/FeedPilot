@@ -345,7 +345,14 @@ class ContentEnhancer:
         model: str,
         system_prompt: Optional[str] = None
     ) -> Optional[str]:
-        """使用OpenAI兼容API"""
+        """
+        使用OpenAI兼容API。
+
+        统一在这里兼容多种返回形式:
+        1) 非流式 ChatCompletion 对象 (官方 openai>=1.x 默认)
+        2) 流式生成器 (第三方兼容网关或 SDK 返回的流式对象)
+        3) 直接返回字符串/字典等简单类型的第三方客户端
+        """
         try:
             from openai import OpenAI  # type: ignore
         except ImportError:
@@ -366,25 +373,27 @@ class ContentEnhancer:
             messages.append({"role": "user", "content": prompt})
 
             # 调用API (Gemini有1M上下文,不限制max_tokens)
+            # 不显式设置 stream 参数，交由 SDK/网关自行决定是否采用流式，
+            # 下游通过 _extract_openai_content 自动适配返回类型。
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.3
-                # 不设置max_tokens,让模型自由生成
+                temperature=0.3,
             )
 
-            # 调试：打印完整响应
-            logger.debug(f"API响应对象: {response}")
+            # 调试：打印完整响应/类型，方便排查第三方兼容实现
+            logger.debug(f"API响应类型: {type(response)}")
+            logger.debug(f"API响应对象(截断预览): {str(response)[:500]}")
 
-            content = response.choices[0].message.content
+            # 统一抽取文本内容，内部会根据实际类型做兼容处理
+            content = self._extract_openai_content(response)
 
             if not content:
                 logger.error("AI返回的content为空")
                 logger.error(f"完整响应: {response}")
-                logger.error(f"choices: {response.choices}")
-                if response.choices:
-                    logger.error(f"第一个choice: {response.choices[0]}")
-                    logger.error(f"message: {response.choices[0].message}")
+                # 对于有choices属性的对象，再额外打印一些辅助信息
+                if hasattr(response, "choices"):
+                    logger.error(f"choices: {getattr(response, 'choices', None)}")
                 return None
 
             content = content.strip()
@@ -393,8 +402,124 @@ class ContentEnhancer:
             return content
 
         except Exception as e:
+            # 这里捕获到的典型错误之一就是: 'str' object has no attribute 'choices'
             logger.error(f"OpenAI API调用失败: {e}")
             return None
+
+    def _extract_openai_content(self, response) -> Optional[str]:
+        """
+        从 OpenAI / OpenAI 兼容接口返回值中抽取最终文本内容。
+
+        设计原则:
+        - 兼容非流式 / 流式 / 第三方直接返回字符串等多种情况
+        - 避免对具体 SDK 类型强依赖, 使用鸭子类型检查
+        """
+        # 1. 如果已经是字符串, 直接返回
+        if isinstance(response, str):
+            return response.strip()
+
+        # 2. 字典返回: 兼容直接 requests/httpx 调用返回的 JSON
+        if isinstance(response, dict):
+            try:
+                choices = response.get("choices") or []
+                if choices:
+                    first = choices[0]
+                    # {"message": {"content": "..."}}
+                    message = first.get("message") or {}
+                    content = message.get("content")
+                    if isinstance(content, str):
+                        return content.strip()
+                    # content 也可能是分段结构
+                    if isinstance(content, list):
+                        parts: List[str] = []
+                        for part in content:
+                            if isinstance(part, dict):
+                                text = part.get("text") or ""
+                                if text:
+                                    parts.append(text)
+                        if parts:
+                            return "".join(parts).strip()
+                # 实在拿不到结构化内容时, 退化为字符串
+                return json.dumps(response, ensure_ascii=False)
+            except Exception as e:
+                logger.debug(f"从字典响应中抽取内容失败: {e}; response={response}")
+                return None
+
+        # 3. 对象返回: 官方 openai.ChatCompletion / OpenAIObject
+        if hasattr(response, "choices"):
+            try:
+                choices_obj = getattr(response, "choices", None)
+                if not choices_obj:
+                    return None
+
+                first_choice = choices_obj[0]
+
+                # 新版: first_choice.message.content
+                message = getattr(first_choice, "message", None)
+                if message is not None:
+                    content = getattr(message, "content", None)
+                    if isinstance(content, str):
+                        return content.strip()
+                    # content 可能是分段结构
+                    if isinstance(content, list):
+                        parts: List[str] = []
+                        for part in content:
+                            # 兼容对象和 dict 两种形式
+                            if isinstance(part, dict):
+                                text = part.get("text") or ""
+                            else:
+                                text = getattr(part, "text", "") or ""
+                            if text:
+                                parts.append(text)
+                        if parts:
+                            return "".join(parts).strip()
+
+                # 老版/第三方: 直接在 choice 上寻找 content/text
+                for attr in ("content", "text"):
+                    value = getattr(first_choice, attr, None)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+
+                # 兜底: 转成字符串
+                return str(response)
+            except Exception as e:
+                logger.debug(f"从对象响应中抽取内容失败: {e}; response={response}")
+                return None
+
+        # 4. 流式: 可迭代但不是字典/字节/字符串/具有choices属性的对象, 视为 chunk 序列
+        if hasattr(response, "__iter__") and not isinstance(response, (dict, bytes, str)):
+            chunks: List[str] = []
+            for chunk in response:
+                try:
+                    # openai>=1.x ChatCompletionChunk: chunk.choices[0].delta.content
+                    if hasattr(chunk, "choices") and chunk.choices:
+                        choice0 = chunk.choices[0]
+                        delta = getattr(choice0, "delta", None)
+                        # delta 可能是对象也可能是 dict
+                        if delta is not None:
+                            if isinstance(delta, dict):
+                                text_part = delta.get("content") or ""
+                            else:
+                                text_part = getattr(delta, "content", "") or ""
+                            if text_part:
+                                chunks.append(text_part)
+                        continue
+
+                    # 一些第三方实现可能直接给 {"choices":[{"delta":{"content":"..."}}]}
+                    if isinstance(chunk, dict):
+                        choices = chunk.get("choices") or []
+                        if choices:
+                            delta = choices[0].get("delta") or {}
+                            text_part = delta.get("content") or ""
+                            if text_part:
+                                chunks.append(text_part)
+                except Exception as e:  # 解析单个 chunk 失败时不中断整体流程
+                    logger.debug(f"解析流式chunk失败: {e}; chunk={chunk}")
+
+            return "".join(chunks).strip() if chunks else None
+
+        # 5. 其它未知类型, 兜底为字符串
+        return str(response).strip()
 
     def _call_claude_api(
         self,
