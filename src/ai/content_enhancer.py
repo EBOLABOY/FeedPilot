@@ -414,9 +414,48 @@ class ContentEnhancer:
         - 兼容非流式 / 流式 / 第三方直接返回字符串等多种情况
         - 避免对具体 SDK 类型强依赖, 使用鸭子类型检查
         """
-        # 1. 如果已经是字符串, 直接返回
+        # 1. 如果已经是字符串, 优先判断是否为 SSE 流式文本
         if isinstance(response, str):
-            return response.strip()
+            text = response.strip()
+
+            # 兼容部分 OpenAI 网关直接返回 text/event-stream 纯文本的情况:
+            # 形如:
+            # data: {... "object":"chat.completion.chunk", "choices":[{"delta":{...}}]}
+            # data: {...}
+            # data: [DONE]
+            if text.startswith("data:") and '"chat.completion.chunk"' in text:
+                chunks: List[str] = []
+                try:
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+
+                        payload = line[len("data:") :].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+
+                        try:
+                            obj = json.loads(payload)
+                        except Exception as e:
+                            logger.debug(f"解析SSE行失败: {e}; line_head={payload[:200]}")
+                            continue
+
+                        choices = obj.get("choices") or []
+                        if choices:
+                            delta = choices[0].get("delta") or {}
+                            # 只聚合真正的内容片段, 忽略 reasoning_content
+                            text_part = delta.get("content") or ""
+                            if text_part:
+                                chunks.append(text_part)
+
+                    if chunks:
+                        return "".join(chunks).strip()
+                except Exception as e:
+                    logger.debug(f"从SSE字符串响应中抽取内容失败: {e}; response_head={text[:500]}")
+
+            # 普通字符串: 原样返回
+            return text
 
         # 2. 字典返回: 兼容直接 requests/httpx 调用返回的 JSON
         if isinstance(response, dict):
