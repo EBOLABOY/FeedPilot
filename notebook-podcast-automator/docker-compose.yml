@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  automator:
+    build: .
+    container_name: notebook-podcast-automator
+    env_file:
+      - .env
+    environment:
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+    volumes:
+      - ./downloads:/app/downloads
+    restart: unless-stopped
