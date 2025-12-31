@@ -1,0 +1,43 @@
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<title>我的订阅</title>
+<author>
+<name>我的订阅</name>
+</author>
+<id>rss:all</id>
+<icon>http://192.168.100.3:10082/static/favicon.ico</icon>
+<updated>2025-12-30T22:31:04Z</updated>
+<dc:date>2025-12-30T22:31:04Z</dc:date>
+<entry>
+<title>关于举办2026第六届中小学班主任发展大会暨班主任专业精进研习坊的通知（2号通知）</title>
+<link rel="alternate" href="https://mp.weixin.qq.com/s/ENWAAeNt5M4RbawgNp8-UA"/>
+<author>
+<name>校长派</name>
+</author>
+<id>rss:ENWAAeNt5M4RbawgNp8-UA</id>
+<updated>2025-12-30T22:31:04Z</updated>
+<published>2025-12-30T22:31:04Z</published>
+<dc:date>2025-12-30T22:31:04Z</dc:date>
+</entry>
+<entry>
+<title>廖辉：怎样写好期末评语？</title>
+<link rel="alternate" href="https://mp.weixin.qq.com/s/8DEtc6BJCOsoR5nRRb2NDw"/>
+<author>
+<name>校长派</name>
+</author>
+<id>rss:8DEtc6BJCOsoR5nRRb2NDw</id>
+<updated>2025-12-30T22:31:04Z</updated>
+<published>2025-12-30T22:31:04Z</published>
+<dc:date>2025-12-30T22:31:04Z</dc:date>
+</entry>
+<entry>
+<title>义务教育优质均衡，究竟要“优”什么？“均”什么？</title>
+<link rel="alternate" href="https://mp.weixin.qq.com/s/C3No0m5CsRurJjZVAt7MUQ"/>
+<author>
+<name>校长派</name>
+</author>
+<id>rss:C3No0m5CsRurJjZVAt7MUQ</id>
+<updated>2025-12-30T22:31:04Z</updated>
+<published>2025-12-30T22:31:04Z</published>
+<dc:date>2025-12-30T22:31:04Z</dc:date>
+</entry>
+</feed>

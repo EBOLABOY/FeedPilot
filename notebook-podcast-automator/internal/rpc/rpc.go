@@ -3,9 +3,12 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
+
+	"notebook-podcast-automator/internal/batchexecute"
 
 	"github.com/davecgh/go-spew/spew"
-	"notebook-podcast-automator/internal/batchexecute"
 )
 
 // RPC endpoint IDs for NotebookLM services
@@ -103,6 +106,25 @@ type Client struct {
 // New creates a new NotebookLM RPC client
 // New creates a new NotebookLM RPC client
 func New(authToken, cookies string, options ...batchexecute.Option) *Client {
+	// Hack: Check if authToken contains the Build Label (bl) separated by "|||"
+	// This avoids changing the function signature which would break generated code.
+	bl := "boq_labs-tailwind-frontend_20251230.10_p0" // Default fallback
+	if strings.Contains(authToken, "|||") {
+		parts := strings.Split(authToken, "|||")
+		if len(parts) == 2 {
+			authToken = parts[0]
+			bl = parts[1]
+			// Check for empty extracted BL
+			if bl == "" {
+				bl = "boq_labs-tailwind-frontend_20251230.10_p0"
+			}
+		}
+	}
+
+	if os.Getenv("NLM_DEBUG") == "true" {
+		fmt.Printf("   [RPC Debug] Using Build Label: %s\n", bl)
+	}
+
 	config := batchexecute.Config{
 		Host:      "notebooklm.google.com",
 		App:       "LabsTailwindUi",
@@ -119,12 +141,9 @@ func New(authToken, cookies string, options ...batchexecute.Option) *Client {
 			"pragma":          "no-cache",
 		},
 		URLParams: map[string]string{
-			// Update to January 2025 build version
-			"bl":    "boq_labs-tailwind-frontend_20250129.00_p0",
+			"bl":    bl,
 			"f.sid": "-7121977511756781186",
 			"hl":    "en",
-			// Omit rt parameter for JSON array format (easier to parse)
-			// "rt":    "c",  // Use "c" for chunked format, omit for JSON array
 		},
 	}
 	return &Client{

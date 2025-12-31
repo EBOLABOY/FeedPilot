@@ -524,6 +524,25 @@ func WithReqIDGenerator(reqid *ReqIDGenerator) Option {
 	}
 }
 
+// WithProxy sets the proxy for the HTTP client
+func WithProxy(proxyURL string) Option {
+	return func(c *Client) {
+		if proxyURL == "" {
+			return
+		}
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return
+		}
+		c.httpClient = &http.Client{
+			Transport: &http.Transport{
+				Proxy: http.ProxyURL(u),
+			},
+			Timeout: 60 * time.Second,
+		}
+	}
+}
+
 // Config holds the configuration for batch execute
 type Config struct {
 	Host      string
