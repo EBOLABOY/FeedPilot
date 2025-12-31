@@ -15,7 +15,6 @@ import (
 
 	"notebook-podcast-automator/internal/api"
 	"notebook-podcast-automator/internal/auth"
-	"notebook-podcast-automator/internal/batchexecute"
 	"notebook-podcast-automator/internal/cleaner"
 	"notebook-podcast-automator/internal/uploader"
 )
@@ -37,16 +36,7 @@ type SourceData struct {
 }
 
 func main() {
-	// 加载环境变量
-	env, err := godotenv.Read()
-	if err != nil {
-		log.Fatalf("❌ Failed to read .env file: %v", err)
-	}
-	cookies := env["NLM_COOKIES"]
-	if cookies == "" {
-		log.Fatal("NLM_COOKIES not set in .env")
-	}
-	fmt.Printf("   > Debug: NLM_COOKIES loaded (length: %d)\n", len(cookies))
+	_ = godotenv.Load()
 
 	// FIX: Override Proxy for Local Windows Execution
 	os.Setenv("HTTP_PROXY", "http://127.0.0.1:10809")
@@ -61,39 +51,14 @@ func main() {
 		inputTarget = "test_feed.xml"
 	}
 
+	creds, err := auth.EnsureCredentials(auth.DefaultEnsureConfig())
+	if err != nil {
+		log.Fatalf("❌ Auth failed: %v", err)
+	}
+	cookies := creds.Cookies
+	authToken := creds.AuthToken
+
 	fmt.Printf("   > Debug: NLM_COOKIES loaded (length: %d)\n", len(cookies))
-
-	// [AUTO-REFRESH] 自动获取最新 Token (1:1 复刻 nlm_upstream 流程)
-	fmt.Println("[0/9] Executing nlm_upstream auth flow...")
-
-	refreshClient, err := auth.NewRefreshClient(cookies)
-	if err != nil {
-		log.Fatalf("❌ Auth initialization failed: %v", err)
-	}
-
-	// 1. Extract GSessionID
-	gsessionID, err := refreshClient.ExtractGSessionID()
-	if err != nil {
-		fmt.Printf("   ⚠️ Warning: Could not extract GSessionID: %v\n", err)
-	}
-
-	// 2. Refresh Credentials (signaler-pa)
-	if err := refreshClient.RefreshCredentials(gsessionID); err != nil {
-		log.Fatalf("❌ Signaler refresh failed: %v", err)
-	}
-
-	// 3. Extract final AuthToken and BL
-	authToken, bl, err := auth.GetTokenFromCookies(cookies)
-	if err != nil {
-		fmt.Printf("   ⚠️ Token extraction failed: %v. Using .env fallback.\n", err)
-		authToken = os.Getenv("NLM_AUTH_TOKEN")
-	} else {
-		auth.UpdateEnvFile(authToken)
-		if bl != "" {
-			authToken = authToken + "|||" + bl
-		}
-		fmt.Printf("   ✅ Auth flow success. Token: [%s...]\n", authToken[:10])
-	}
 
 	// ========== Logic for Multi-Source Aggregation ==========
 	var sources []SourceData
@@ -224,8 +189,8 @@ func main() {
 
 	// ========== [3/9] Init NotebookLM Client ==========
 	fmt.Println("[2/9] Initializing NotebookLM Client...")
-	client := api.New(authToken, cookies, batchexecute.WithProxy("http://127.0.0.1:10809"))
-	client.SetUseDirectRPC(true)
+	client := api.New(authToken, cookies)
+	// client.SetUseDirectRPC(true) -> Removed to use standard orchestration service (Proto)
 
 	// ========== [4/9] Create Notebook ==========
 	fmt.Println("[3/9] Creating new Notebook...")

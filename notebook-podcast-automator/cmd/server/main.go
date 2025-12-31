@@ -1,10 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -12,57 +12,25 @@ import (
 
 	"notebook-podcast-automator/internal/api"
 	"notebook-podcast-automator/internal/auth"
+	"notebook-podcast-automator/internal/batchexecute"
 )
 
 // Server 模拟一个长期运行的后端服务
 type Server struct {
 	client   *api.Client
 	clientMu sync.RWMutex
-	tokenMgr *auth.Manager
+	tokenPre string
 }
 
 func main() {
 	_ = godotenv.Load()
 
-	cookies := os.Getenv("NLM_COOKIES")
-	initialToken := os.Getenv("NLM_AUTH_TOKEN") // 可以是空的，让 Manager 第一次去抓
-
 	srv := &Server{}
 
-	// 1. 初始化 TokenManager
-	// 定义回调：当 Token 刷新时，更新 Server 里的 Client
-	updateFunc := func(newToken string) {
-		fmt.Printf("🔄 [Server] Detected token update. Re-initializing Client...\n")
-
-		// 重新创建 Client 实例
-		newClient := api.New(newToken, cookies)
-		// 恢复之前的配置 (例如直连模式)
-		newClient.SetUseDirectRPC(true)
-
-		srv.clientMu.Lock()
-		srv.client = newClient
-		srv.clientMu.Unlock()
-
-		fmt.Println("✨ [Server] Client updated with fresh token.")
-	}
-
-	srv.tokenMgr = auth.NewManager(cookies, initialToken, updateFunc)
-
-	// 2. 也是第一次，确保我们有一个可用的 Token
 	fmt.Println("🚀 [Server] Starting up...")
-	if initialToken == "" {
-		fmt.Println("   > No initial token, forcing refresh...")
-		if err := srv.tokenMgr.Refresh(); err != nil {
-			log.Fatalf("Fatal: Could not get initial token: %v", err)
-		}
-	} else {
-		// 手动触发一次初始化 Client
-		updateFunc(initialToken)
+	if err := srv.refreshClient(); err != nil {
+		log.Fatalf("Fatal: Could not initialize client: %v", err)
 	}
-
-	// 3. 启动后台保活 (每 45 分钟刷新一次)
-	srv.tokenMgr.Start(45 * time.Minute)
-	defer srv.tokenMgr.Stop()
 
 	// 4. 启动 HTTP 服务
 	http.HandleFunc("/status", srv.HandleStatus)
@@ -73,16 +41,44 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
+func (s *Server) refreshClient() error {
+	creds, err := auth.EnsureCredentials(auth.DefaultEnsureConfig())
+	if err != nil {
+		return err
+	}
+
+	client := api.New(creds.AuthToken, creds.Cookies)
+
+	s.clientMu.Lock()
+	s.client = client
+	s.tokenPre = tokenPrefix(creds.AuthToken, 10)
+	s.clientMu.Unlock()
+
+	return nil
+}
+
+func tokenPrefix(token string, n int) string {
+	if token == "" || n <= 0 {
+		return ""
+	}
+	if len(token) <= n {
+		return token
+	}
+	return token[:n]
+}
+
 // HandleStatus 检查状态
 func (s *Server) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	s.clientMu.RLock()
 	clientAvailable := s.client != nil
-	token := s.tokenMgr.GetToken()
+	token := s.tokenPre
 	s.clientMu.RUnlock()
 
 	fmt.Fprintf(w, "Server Status: Running\n")
 	fmt.Fprintf(w, "Client Available: %v\n", clientAvailable)
-	fmt.Fprintf(w, "Current Token (prefix): %s...\n", token[:10])
+	if token != "" {
+		fmt.Fprintf(w, "Current Token (prefix): %s...\n", token)
+	}
 	fmt.Fprintf(w, "Time: %s\n", time.Now().Format(time.RFC3339))
 }
 
@@ -102,8 +98,19 @@ func (s *Server) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("📨 [Server] Received request, calling NotebookLM API...")
 	projects, err := client.ListRecentlyViewedProjects()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("API Error: %v", err), 500)
-		return
+		// Best-effort re-auth retry on 401
+		if errors.Is(err, batchexecute.ErrUnauthorized) {
+			if refreshErr := s.refreshClient(); refreshErr == nil {
+				s.clientMu.RLock()
+				client = s.client
+				s.clientMu.RUnlock()
+				projects, err = client.ListRecentlyViewedProjects()
+			}
+		}
+		if err != nil {
+			http.Error(w, fmt.Sprintf("API Error: %v", err), 500)
+			return
+		}
 	}
 
 	fmt.Fprintf(w, "Successfully listed %d projects using the current live token.\n", len(projects))

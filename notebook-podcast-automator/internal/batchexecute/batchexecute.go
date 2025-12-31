@@ -199,6 +199,21 @@ func (c *Client) Execute(rpcs []RPC) (*Response, error) {
 	}
 	req.Header.Set("cookie", c.config.Cookies)
 
+	// Fix: Generate and set Authorization header if SAPISID is present
+	if sapisid := extractSAPISID(c.config.Cookies); sapisid != "" {
+		origin := "https://notebooklm.google.com"
+		if o, ok := c.config.Headers["origin"]; ok {
+			origin = o
+		}
+		authHeader := generateSAPISIDHASH(sapisid, origin)
+		req.Header.Set("authorization", authHeader)
+		if c.config.Debug {
+			fmt.Printf("\n[Fix] Added Authorization header: %s\n", authHeader)
+		}
+	} else if c.config.Debug {
+		fmt.Printf("\n[Fix] Warning: No SAPISID found in cookies, Authorization header skipped\n")
+	}
+
 	if c.config.Debug {
 		fmt.Printf("\nRequest Headers:\n")
 		for k, v := range req.Header {
@@ -521,25 +536,6 @@ func WithURLParams(params map[string]string) Option {
 func WithReqIDGenerator(reqid *ReqIDGenerator) Option {
 	return func(c *Client) {
 		c.reqid = reqid
-	}
-}
-
-// WithProxy sets the proxy for the HTTP client
-func WithProxy(proxyURL string) Option {
-	return func(c *Client) {
-		if proxyURL == "" {
-			return
-		}
-		u, err := url.Parse(proxyURL)
-		if err != nil {
-			return
-		}
-		c.httpClient = &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(u),
-			},
-			Timeout: 60 * time.Second,
-		}
 	}
 }
 

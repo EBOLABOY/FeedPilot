@@ -1,4 +1,4 @@
-// Package api provides the NotebookLM API client.
+﻿// Package api provides the NotebookLM API client.
 package api
 
 import (
@@ -709,7 +709,6 @@ func (c *Client) GetAudioOverview(projectID string) (*AudioOverviewResult, error
 	if err != nil {
 		return nil, fmt.Errorf("get audio overview: %w", err)
 	}
-	fmt.Printf("DEBUG: Raw Status: %s, ContentLen: %d\n", audioOverview.Status, len(audioOverview.Content))
 	// Convert pb.AudioOverview to AudioOverviewResult
 	// Note: pb.AudioOverview has different fields than expected, so we map what's available
 	result := &AudioOverviewResult{

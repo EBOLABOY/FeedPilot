@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -17,16 +16,13 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	// 1. 认证
-	cookies := os.Getenv("NLM_COOKIES")
-	fmt.Println("[0/6] Refreshing Token...")
-	authToken, err := auth.GetTokenFromCookies(cookies)
+	// 1. 认证 (优先 .env / ~/.nlm/env，必要时用浏览器 profile 提取)
+	creds, err := auth.EnsureCredentials(auth.DefaultEnsureConfig())
 	if err != nil {
-		fmt.Printf("   ⚠️ Refresh failed, trying env: %v\n", err)
-		authToken = os.Getenv("NLM_AUTH_TOKEN")
+		log.Fatalf("❌ Auth failed: %v", err)
 	}
 
-	client := api.New(authToken, cookies)
+	client := api.New(creds.AuthToken, creds.Cookies)
 
 	// 2. 创建笔记本 (基础)
 	fmt.Println("\n[1/6] Feature: Create Notebook")
@@ -40,8 +36,8 @@ func main() {
 
 	// 3.1 Feature: Add Source From URL
 	fmt.Println("\n[2/6] Feature: AddSourceFromURL")
-	// 使用一个简单的 Wikipedia 页面作为测试
-	testURL := "https://en.wikipedia.org/wiki/Go_(programming_language)"
+	// 使用一个简单的 Wikipedia 页面作为测试:
+	// https://en.wikipedia.org/wiki/Go_(programming_language)
 	// 注意: Client 内部的 AddSourceFromURL 可能会遇到 Google 的爬虫限制
 	// 这里演示调用方式
 	// err = client.AddSourceFromURL(projectID, testURL)

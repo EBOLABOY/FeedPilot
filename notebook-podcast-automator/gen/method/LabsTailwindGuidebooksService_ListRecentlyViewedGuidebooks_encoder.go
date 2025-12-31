@@ -1,4 +1,4 @@
-package method
+﻿package method
 
 import (
 	notebooklmv1alpha1 "notebook-podcast-automator/gen/notebooklm/v1alpha1"
