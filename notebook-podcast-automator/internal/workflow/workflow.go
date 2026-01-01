@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	pb "notebook-podcast-automator/gen/notebooklm/v1alpha1"
 	"notebook-podcast-automator/internal/api"
 	"notebook-podcast-automator/internal/auth"
 	"notebook-podcast-automator/internal/batchexecute"
@@ -55,6 +56,7 @@ type Config struct {
 	FilterLLMModel        string
 	FilterLLMMaxChars     int
 	FilterLLMTimeout      time.Duration
+	FilterLLMRetries      int
 	FilterLLMAPIKey       string
 }
 
@@ -155,16 +157,27 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 	}
 
 	progress.Report("extract", fmt.Sprintf("extracting content (count=%d)", len(candidates)))
-	sources, err := extractSources(candidates)
+	sources, err := extractSources(candidates, progress, func(src Source, reason string) {
+		if st == nil {
+			return
+		}
+		_ = st.MarkSkipped(src.Key, src.URL, src.Title, reason)
+	})
 	if err != nil {
 		return Result{}, err
 	}
 
 	if len(sources) == 0 {
+		// Extraction can fail for valid-looking entries (e.g. WeChat deleted/blocked pages).
+		// When state is enabled, mark such entries as skipped and treat the run as a noop.
+		if st != nil {
+			return Result{Noop: true, GeneratedAt: time.Now()}, nil
+		}
 		return Result{}, fmt.Errorf("no valid content found to process")
 	}
 
-	if filtered, ferr := filterSources(ctx, sources, cfg, progress, func(src Source, reason string) {
+	preferredTitle := ""
+	if filtered, title, ferr := filterSources(ctx, sources, cfg, progress, func(src Source, reason string) {
 		if st == nil {
 			return
 		}
@@ -173,6 +186,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 		return Result{}, ferr
 	} else {
 		sources = filtered
+		preferredTitle = compactWhitespace(title)
 	}
 
 	if len(sources) == 0 {
@@ -254,7 +268,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 		progress.Report("warn", fmt.Sprintf("CreateAudioOverview failed: %v", err))
 	}
 
-	audioPath, audioSize, audioTitle, err := waitAndDownloadAudio(ctx, client, episode.ProjectID, episode.PodcastTitle, episode.GeneratedAt, cfg, progress)
+	audioPath, audioSize, audioTitle, err := waitAndDownloadAudio(ctx, client, episode.ProjectID, preferredTitle, episode.PodcastTitle, episode.GeneratedAt, cfg, progress)
 	if err != nil {
 		return Result{}, err
 	}
@@ -392,6 +406,15 @@ func withDefaults(cfg Config) Config {
 	if cfg.FilterLLMTimeout <= 0 {
 		cfg.FilterLLMTimeout = time.Duration(envInt("NPA_FILTER_LLM_TIMEOUT_SECONDS", 30)) * time.Second
 	}
+	if cfg.FilterLLMRetries == 0 {
+		cfg.FilterLLMRetries = envInt("NPA_FILTER_LLM_RETRIES", 2)
+	}
+	if cfg.FilterLLMRetries < 0 {
+		cfg.FilterLLMRetries = 0
+	}
+	if cfg.FilterLLMRetries > 10 {
+		cfg.FilterLLMRetries = 10
+	}
 	// 0 means "no truncation" (send full cleaned content to the LLM).
 	// Only apply truncation when a positive limit is explicitly provided.
 	if cfg.FilterLLMMaxChars == 0 {
@@ -511,17 +534,27 @@ func canonicalizeURLForKey(raw string) string {
 	return u.String()
 }
 
-func extractSources(candidates []Source) ([]Source, error) {
+func extractSources(candidates []Source, progress ProgressFunc, onSkip func(Source, string)) ([]Source, error) {
 	var out []Source
-	for _, c := range candidates {
+	for i, c := range candidates {
 		if strings.TrimSpace(c.URL) == "" {
 			continue
 		}
 		title, content, err := cleaner.ExtractContent(c.URL)
 		if err != nil {
+			reason := fmt.Sprintf("extract_failed: %v", err)
+			if onSkip != nil {
+				onSkip(c, reason)
+			}
+			progress.Report("warn", fmt.Sprintf("extract failed (index=%d/%d title=%s url=%s): %v", i+1, len(candidates), strings.TrimSpace(c.Title), strings.TrimSpace(c.URL), err))
 			continue
 		}
 		if strings.TrimSpace(content) == "" {
+			reason := "extract_empty"
+			if onSkip != nil {
+				onSkip(c, reason)
+			}
+			progress.Report("warn", fmt.Sprintf("extract empty (index=%d/%d title=%s url=%s)", i+1, len(candidates), strings.TrimSpace(c.Title), strings.TrimSpace(c.URL)))
 			continue
 		}
 		if strings.TrimSpace(title) == "" {
@@ -551,27 +584,63 @@ func buildSummary(sources []Source) string {
 	return b.String()
 }
 
-func resolveAudioTitle(client *api.Client, projectID string, overview *api.AudioOverviewResult, fallbackTitle string) (title string, from string, err error) {
+func resolveAudioTitle(client *api.Client, projectID string, overview *api.AudioOverviewResult, preferredTitle string, fallbackTitle string) (title string, from string, err error) {
+	if t := strings.TrimSpace(preferredTitle); t != "" {
+		return t, "preferred", nil
+	}
+
+	var artifactErr error
 	if client != nil && overview != nil {
 		if id := strings.TrimSpace(overview.AudioID); id != "" {
 			t, terr := client.GetArtifactTitle(projectID, id)
 			if terr != nil {
-				err = terr
+				artifactErr = terr
 			} else if tt := strings.TrimSpace(t); tt != "" {
-				return tt, "artifact", nil
+				return tt, "artifact_audio_id", nil
+			}
+		}
+
+		// If overview.AudioID isn't directly fetchable as an artifact, scan project artifacts
+		// for the audio overview and use its user-visible note title.
+		if strings.TrimSpace(projectID) != "" {
+			artifacts, aerr := client.ListArtifacts(projectID)
+			if aerr != nil && artifactErr == nil {
+				artifactErr = aerr
+			}
+			for _, a := range artifacts {
+				if a == nil {
+					continue
+				}
+				if a.GetType() != pb.ArtifactType_ARTIFACT_TYPE_AUDIO_OVERVIEW {
+					continue
+				}
+				aid := strings.TrimSpace(a.GetArtifactId())
+				if aid == "" {
+					continue
+				}
+				t, terr := client.GetArtifactTitle(projectID, aid)
+				if terr != nil {
+					if artifactErr == nil {
+						artifactErr = terr
+					}
+					continue
+				}
+				if tt := strings.TrimSpace(t); tt != "" {
+					return tt, "artifact_scan", nil
+				}
 			}
 		}
 		if t := strings.TrimSpace(overview.Title); t != "" {
-			return t, "overview", err
+			return t, "overview", artifactErr
 		}
 	}
 	if t := strings.TrimSpace(fallbackTitle); t != "" {
-		return t, "fallback", err
+		return t, "fallback", artifactErr
 	}
-	return "", "empty", err
+	return "", "empty", artifactErr
 }
 
-func waitAndDownloadAudio(ctx context.Context, client *api.Client, projectID string, fallbackTitle string, ts time.Time, cfg Config, progress ProgressFunc) (string, int64, string, error) {
+func waitAndDownloadAudio(ctx context.Context, client *api.Client, projectID string, preferredTitle string, fallbackTitle string, ts time.Time, cfg Config, progress ProgressFunc) (string, int64, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, cfg.PollTimeout)
 	defer cancel()
 
@@ -630,7 +699,7 @@ func waitAndDownloadAudio(ctx context.Context, client *api.Client, projectID str
 			continue
 		}
 
-		audioTitle, titleFrom, titleErr := resolveAudioTitle(client, projectID, overview, fallbackTitle)
+		audioTitle, titleFrom, titleErr := resolveAudioTitle(client, projectID, overview, preferredTitle, fallbackTitle)
 		if titleErr != nil {
 			progress.Report("warn", fmt.Sprintf("audio title: artifact lookup failed (artifact_id=%s): %v", shortID(overview.AudioID), titleErr))
 		}

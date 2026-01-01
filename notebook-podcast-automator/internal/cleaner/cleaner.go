@@ -29,6 +29,9 @@ func ExtractContent(url string) (string, string, error) {
 	if err != nil {
 		return title, "", err
 	}
+	if strings.TrimSpace(content) == "" {
+		return title, "", fmt.Errorf("empty content after cleaning")
+	}
 
 	return title, content, nil
 }
@@ -40,7 +43,7 @@ func fetchHTML(url string) (string, error) {
 	}
 
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 		Transport: transport,
 	}
 
@@ -107,6 +110,12 @@ func Clean(htmlContent string) (string, error) {
 		return "", err
 	}
 
+	// WeChat sometimes returns a "share notice" wrapper (e.g. deleted/violated content),
+	// where #js_content exists but contains no actual article text.
+	if doc.Find("#js_content.share_notice_wrp").Length() > 0 {
+		return "", fmt.Errorf("wechat content unavailable (share notice)")
+	}
+
 	// 1. Extract Main Content
 	var content *goquery.Selection
 	wechatSelectors := []string{"#js_content", ".rich_media_content"}
@@ -132,7 +141,11 @@ func Clean(htmlContent string) (string, error) {
 
 	// 3. Extract Text
 	text := content.Text()
-	return cleanText(text), nil
+	cleaned := cleanText(text)
+	if strings.TrimSpace(cleaned) == "" {
+		return "", fmt.Errorf("empty content after cleaning")
+	}
+	return cleaned, nil
 }
 
 func removeNoise(s *goquery.Selection) {

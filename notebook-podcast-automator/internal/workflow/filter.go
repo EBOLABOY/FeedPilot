@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -121,11 +123,13 @@ func prefilterCandidatesByRules(candidates []Source, cfg Config, markDropped fun
 	return kept, dropped
 }
 
-func filterSources(ctx context.Context, sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) ([]Source, error) {
+func filterSources(ctx context.Context, sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) ([]Source, string, error) {
 	mode := normalizeFilterMode(cfg.FilterMode)
 	if mode == filterModeNone {
-		return sources, nil
+		return sources, "", nil
 	}
+
+	llmTitle := ""
 
 	if mode == filterModeRules {
 		sources = filterSourcesByRules(sources, cfg, progress, markDropped)
@@ -141,26 +145,30 @@ func filterSources(ctx context.Context, sources []Source, cfg Config, progress P
 		sources = kept
 	}
 	if mode == filterModeLLM || mode == filterModeHybrid {
-		filtered, err := filterSourcesByLLM(ctx, sources, cfg, progress, markDropped)
+		filtered, title, err := filterSourcesByLLM(ctx, sources, cfg, progress, markDropped)
 		if err != nil {
 			if mode == filterModeLLM {
-				return nil, err
+				return nil, "", err
 			}
 			progress.Report("warn", fmt.Sprintf("llm filter skipped: %v", err))
 		} else {
 			sources = filtered
+			llmTitle = compactWhitespace(title)
+			if llmTitle != "" {
+				progress.Report("filter", fmt.Sprintf("llm suggested podcast title: %s", llmTitle))
+			}
 		}
 	}
 
 	if len(sources) == 0 {
 		if cfg.FilterStrict {
-			return nil, fmt.Errorf("no sources left after filtering")
+			return nil, "", fmt.Errorf("no sources left after filtering")
 		}
 		progress.Report("filter", "all sources filtered out; noop")
-		return nil, nil
+		return nil, llmTitle, nil
 	}
 
-	return sources, nil
+	return sources, llmTitle, nil
 }
 
 func filterSourcesByRules(sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) []Source {
@@ -245,22 +253,60 @@ type openAIChatCompletionResponse struct {
 	} `json:"error,omitempty"`
 }
 
+type llmHTTPError struct {
+	StatusCode  int
+	Status      string
+	ContentType string
+	Body        string
+}
+
+func (e *llmHTTPError) Error() string {
+	body := strings.TrimSpace(e.Body)
+	if body == "" {
+		return fmt.Sprintf("llm http %s", strings.TrimSpace(e.Status))
+	}
+	return fmt.Sprintf("llm http %s: %s", strings.TrimSpace(e.Status), body)
+}
+
+type llmResponseParseError struct {
+	Err         error
+	ContentType string
+	Snippet     string
+}
+
+func (e *llmResponseParseError) Error() string {
+	ct := strings.TrimSpace(e.ContentType)
+	snippet := strings.TrimSpace(e.Snippet)
+	switch {
+	case ct != "" && snippet != "":
+		return fmt.Sprintf("parse llm response: %v (contentType=%s snippet=%q)", e.Err, ct, snippet)
+	case ct != "":
+		return fmt.Sprintf("parse llm response: %v (contentType=%s)", e.Err, ct)
+	case snippet != "":
+		return fmt.Sprintf("parse llm response: %v (snippet=%q)", e.Err, snippet)
+	default:
+		return fmt.Sprintf("parse llm response: %v", e.Err)
+	}
+}
+
+func (e *llmResponseParseError) Unwrap() error { return e.Err }
+
 type llmDecision struct {
 	Keep   bool    `json:"keep"`
 	Reason string  `json:"reason,omitempty"`
 	Score  float64 `json:"score,omitempty"`
 }
 
-func filterSourcesByLLM(ctx context.Context, sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) ([]Source, error) {
+func filterSourcesByLLM(ctx context.Context, sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) ([]Source, string, error) {
 	if len(sources) == 0 {
-		return sources, nil
+		return sources, "", nil
 	}
 	if strings.TrimSpace(cfg.FilterLLMModel) == "" {
-		return nil, fmt.Errorf("llm filter enabled but model is empty; set NPA_FILTER_LLM_MODEL or pass filter_llm_model")
+		return nil, "", fmt.Errorf("llm filter enabled but model is empty; set NPA_FILTER_LLM_MODEL or pass filter_llm_model")
 	}
 	apiKey := strings.TrimSpace(cfg.FilterLLMAPIKey)
 	if apiKey == "" {
-		return nil, fmt.Errorf("llm filter enabled but api key is empty; set NPA_FILTER_LLM_API_KEY or OPENAI_API_KEY")
+		return nil, "", fmt.Errorf("llm filter enabled but api key is empty; set NPA_FILTER_LLM_API_KEY or OPENAI_API_KEY")
 	}
 
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.FilterLLMBaseURL), "/")
@@ -275,13 +321,41 @@ func filterSourcesByLLM(ctx context.Context, sources []Source, cfg Config, progr
 	}
 	maxChars := cfg.FilterLLMMaxChars
 
-	progress.Report("filter", fmt.Sprintf("llm filtering sources (count=%d model=%s)", len(sources), cfg.FilterLLMModel))
+	retries := cfg.FilterLLMRetries
+	if retries < 0 {
+		retries = 0
+	}
+	if retries > 10 {
+		retries = 10
+	}
+	attempts := retries + 1
+
+	progress.Report("filter", fmt.Sprintf("llm filtering sources (count=%d model=%s attempts=%d timeout=%s)", len(sources), cfg.FilterLLMModel, attempts, timeout))
 
 	httpClient := &http.Client{Timeout: timeout}
 
-	decisions, err := llmDecideBatch(ctx, httpClient, endpoint, apiKey, cfg.FilterLLMModel, sources, maxChars)
-	if err != nil {
-		return nil, err
+	var decisions map[int]llmDecision
+	var suggestedTitle string
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			backoff := llmRetryBackoff(attempt - 1)
+			progress.Report("warn", fmt.Sprintf("llm retrying (attempt=%d/%d after=%s): %v", attempt, attempts, backoff, lastErr))
+			if err := sleepWithContext(ctx, backoff); err != nil {
+				return nil, "", err
+			}
+		}
+
+		decisions, suggestedTitle, lastErr = llmDecideBatch(ctx, httpClient, endpoint, apiKey, cfg.FilterLLMModel, sources, maxChars)
+		if lastErr == nil {
+			break
+		}
+		if attempt == attempts || !isRetryableLLMError(lastErr) {
+			if attempt == attempts && attempts > 1 {
+				return nil, "", fmt.Errorf("llm request failed after %d attempts: %w", attempts, lastErr)
+			}
+			return nil, "", lastErr
+		}
 	}
 
 	kept := make([]Source, 0, len(sources))
@@ -305,7 +379,10 @@ func filterSourcesByLLM(ctx context.Context, sources []Source, cfg Config, progr
 	}
 
 	progress.Report("filter", fmt.Sprintf("llm filtered sources: kept=%d dropped=%d", len(kept), dropped))
-	return kept, nil
+	if len(kept) == 0 {
+		suggestedTitle = ""
+	}
+	return kept, strings.TrimSpace(suggestedTitle), nil
 }
 
 type llmBatchDecision struct {
@@ -314,13 +391,21 @@ type llmBatchDecision struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint string, apiKey string, model string, sources []Source, maxChars int) (map[int]llmDecision, error) {
+type llmBatchResponse struct {
+	PodcastTitle string             `json:"podcast_title,omitempty"`
+	Decisions    []llmBatchDecision `json:"decisions,omitempty"`
+	Items        []llmBatchDecision `json:"items,omitempty"`
+}
+
+func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint string, apiKey string, model string, sources []Source, maxChars int) (map[int]llmDecision, string, error) {
 	system := strings.Join([]string{
 		"你是中文内容筛选助手，用于将一组文章筛选为“适合做每日播客简报”的素材。",
 		"过滤目标：剔除低信息密度内容，例如：报名/考试/招聘/公示/活动通知/广告营销/纯链接导流等；保留有观点、有事实、有分析、有深度的信息。",
 		"必须对每一篇文章都给出判断（keep 或 drop）。如果不确定，倾向 keep=true。",
-		"只输出 JSON 数组，禁止输出代码块、解释文本。",
-		"JSON 格式示例：[{\"index\":0,\"keep\":true,\"reason\":\"...\"},{\"index\":1,\"keep\":false,\"reason\":\"...\"}]。",
+		"同时给出一个播客标题（podcast_title），用于作为音频文件名/播客标题，要求：中文、简洁、8~30字、不要包含日期/时间、不要带引号或书名号。",
+		"podcast_title 必须仅根据 keep=true 的文章生成；禁止参考 keep=false 的文章。如果 keep=true 的文章数量为 0，则 podcast_title 必须为空字符串（\"\"）。",
+		"只输出 JSON（禁止输出代码块、解释文本）。",
+		"JSON 格式示例：{\"podcast_title\":\"...\",\"decisions\":[{\"index\":0,\"keep\":true,\"reason\":\"...\"},{\"index\":1,\"keep\":false,\"reason\":\"...\"}]}（当没有 keep=true 时，podcast_title 为空字符串）。",
 		"reason 不超过 60 字。",
 	}, "\n")
 
@@ -346,7 +431,7 @@ func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint strin
 
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, httpClient.Timeout)
@@ -354,36 +439,46 @@ func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint strin
 
 	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	bodyStr := strings.TrimSpace(string(body))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("llm http %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return nil, "", &llmHTTPError{
+			StatusCode:  resp.StatusCode,
+			Status:      resp.Status,
+			ContentType: resp.Header.Get("Content-Type"),
+			Body:        truncateRunes(compactWhitespace(bodyStr), 2048),
+		}
 	}
 
 	var parsed openAIChatCompletionResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("parse llm response: %w", err)
+		return nil, "", &llmResponseParseError{
+			Err:         err,
+			ContentType: resp.Header.Get("Content-Type"),
+			Snippet:     truncateRunes(compactWhitespace(bodyStr), 256),
+		}
 	}
 	if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
-		return nil, fmt.Errorf("llm error: %s", parsed.Error.Message)
+		return nil, "", fmt.Errorf("llm error: %s", parsed.Error.Message)
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("llm response has no choices")
+		return nil, "", fmt.Errorf("llm response has no choices")
 	}
 
-	items, ok := parseLLMBatchDecisions(parsed.Choices[0].Message.Content)
+	items, podcastTitle, ok := parseLLMBatchResponse(parsed.Choices[0].Message.Content)
 	if !ok {
-		return nil, fmt.Errorf("llm decisions not parseable")
+		return nil, "", fmt.Errorf("llm decisions not parseable")
 	}
 
 	out := make(map[int]llmDecision, len(sources))
@@ -397,7 +492,7 @@ func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint strin
 		}
 		out[item.Index] = d
 	}
-	return out, nil
+	return out, compactWhitespace(podcastTitle), nil
 }
 
 func parseLLMDecision(s string) (llmDecision, bool) {
@@ -477,6 +572,57 @@ func parseLLMBatchDecisions(s string) ([]llmBatchDecision, bool) {
 		}
 	}
 	return nil, false
+}
+
+func parseLLMBatchResponse(s string) ([]llmBatchDecision, string, bool) {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return nil, "", false
+	}
+
+	if strings.Contains(raw, "```") {
+		raw = strings.ReplaceAll(raw, "```json", "```")
+		raw = strings.ReplaceAll(raw, "```", "")
+		raw = strings.TrimSpace(raw)
+	}
+
+	startObj := strings.Index(raw, "{")
+	endObj := strings.LastIndex(raw, "}")
+	if startObj >= 0 && endObj > startObj {
+		obj := raw[startObj : endObj+1]
+		var wrapped llmBatchResponse
+		if err := json.Unmarshal([]byte(obj), &wrapped); err == nil {
+			title := strings.TrimSpace(wrapped.PodcastTitle)
+			items := wrapped.Decisions
+			if len(items) == 0 {
+				items = wrapped.Items
+			}
+			if len(items) > 0 {
+				return items, title, true
+			}
+		}
+
+		var wrappedAny map[string]any
+		if err := json.Unmarshal([]byte(obj), &wrappedAny); err == nil {
+			title, _ := wrappedAny["podcast_title"].(string)
+			if v, ok := wrappedAny["decisions"]; ok {
+				if items, ok := parseLLMBatchDecisionsLoose(v); ok {
+					return items, strings.TrimSpace(title), true
+				}
+			}
+			if v, ok := wrappedAny["items"]; ok {
+				if items, ok := parseLLMBatchDecisionsLoose(v); ok {
+					return items, strings.TrimSpace(title), true
+				}
+			}
+		}
+	}
+
+	items, ok := parseLLMBatchDecisions(raw)
+	if !ok {
+		return nil, "", false
+	}
+	return items, "", true
 }
 
 func parseLLMBatchDecisionsLoose(input any) ([]llmBatchDecision, bool) {
@@ -643,4 +789,88 @@ func splitCommaList(raw string) []string {
 		out = append(out, p)
 	}
 	return out
+}
+
+func compactWhitespace(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func llmRetryBackoff(retryIndex int) time.Duration {
+	if retryIndex <= 0 {
+		return 0
+	}
+	shift := retryIndex - 1
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 4 {
+		shift = 4
+	}
+	d := 2 * time.Second * time.Duration(1<<shift)
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func isRetryableLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	var httpErr *llmHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return true
+		}
+		return httpErr.StatusCode >= 500 && httpErr.StatusCode <= 599
+	}
+
+	var parseErr *llmResponseParseError
+	if errors.As(err, &parseErr) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "tempor") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "eof") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "overloaded") ||
+		strings.Contains(msg, "unavailable") {
+		return true
+	}
+	return false
 }

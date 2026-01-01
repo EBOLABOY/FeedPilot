@@ -106,7 +106,7 @@ func TestFilterSources_Hybrid_LLMMisconfiguredFallsBackToRules(t *testing.T) {
 		{Title: "深度解读：教育改革与人才培养", URL: "https://example.com/b", Content: "内容很长..."},
 	}
 
-	out, err := filterSources(context.Background(), in, cfg, nil, nil)
+	out, _, err := filterSources(context.Background(), in, cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("expected err=nil, got %v", err)
 	}

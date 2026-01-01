@@ -63,6 +63,8 @@ Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'ap
 #   NPA_FILTER_LLM_BASE_URL=https://api.openai.com/v1
 #   NPA_FILTER_LLM_MODEL=gpt-4o-mini
 #   NPA_FILTER_LLM_API_KEY=xxxxx
+#   NPA_FILTER_LLM_TIMEOUT_SECONDS=300
+#   NPA_FILTER_LLM_RETRIES=2
 $body = @{
   input_url = 'http://192.168.100.3:10082/atom'
   max_entries = 10

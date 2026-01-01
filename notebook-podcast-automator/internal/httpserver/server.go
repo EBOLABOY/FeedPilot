@@ -55,6 +55,7 @@ type RunRequest struct {
 	FilterLLMModel        string   `json:"filter_llm_model,omitempty"`
 	FilterLLMMaxChars     int      `json:"filter_llm_max_chars,omitempty"`
 	FilterLLMTimeoutSec   int      `json:"filter_llm_timeout_seconds,omitempty"`
+	FilterLLMRetries      int      `json:"filter_llm_retries,omitempty"`
 }
 
 type Event struct {
@@ -205,6 +206,7 @@ func (s *Server) executeRun(ctx context.Context, req RunRequest, logf func(stage
 		FilterLLMBaseURL:      req.FilterLLMBaseURL,
 		FilterLLMModel:        req.FilterLLMModel,
 		FilterLLMMaxChars:     req.FilterLLMMaxChars,
+		FilterLLMRetries:      req.FilterLLMRetries,
 	}
 	if req.PollIntervalSeconds > 0 {
 		cfg.PollInterval = time.Duration(req.PollIntervalSeconds) * time.Second

@@ -1614,20 +1614,38 @@ func (c *Client) GetArtifact(projectID string, artifactID string) (*pb.Artifact,
 		return nil, fmt.Errorf("artifact ID required")
 	}
 
-	resp, err := c.rpc.Do(rpc.Call{
-		ID:         rpc.RPCGetArtifact,
-		Args:       []interface{}{artifactID},
-		NotebookID: projectID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("get artifact RPC: %w", err)
+	// Use direct RPC with Notebook context: artifact endpoints frequently require
+	// source-path=/notebook/<projectID>. Omitting NotebookID can trigger HTTP 400.
+	if strings.TrimSpace(projectID) != "" {
+		resp, err := c.rpc.Do(rpc.Call{
+			ID:         rpc.RPCGetArtifact,
+			Args:       []interface{}{artifactID},
+			NotebookID: projectID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get artifact RPC: %w", err)
+		}
+
+		var artifact pb.Artifact
+		if err := beprotojson.Unmarshal(resp, &artifact); err != nil {
+			return nil, fmt.Errorf("parse artifact: %w", err)
+		}
+		if strings.TrimSpace(artifact.ArtifactId) == "" {
+			artifact.ArtifactId = artifactID
+		}
+		if strings.TrimSpace(artifact.ProjectId) == "" {
+			artifact.ProjectId = projectID
+		}
+		return &artifact, nil
 	}
 
-	var result pb.Artifact
-	if err := beprotojson.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse artifact response: %w", err)
+	// Fallback: no projectID available; try orchestration service.
+	ctx := context.Background()
+	artifact, err := c.orchestrationService.GetArtifact(ctx, &pb.GetArtifactRequest{ArtifactId: artifactID})
+	if err != nil {
+		return nil, fmt.Errorf("get artifact: %w", err)
 	}
-	return &result, nil
+	return artifact, nil
 }
 
 // GetArtifactTitle returns the user-visible title for an artifact when available.
