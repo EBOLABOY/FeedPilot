@@ -10,7 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -o automator .
+RUN go build -trimpath -buildvcs=false -o automator .
 
 # Runtime stage
 FROM alpine:latest

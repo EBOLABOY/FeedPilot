@@ -57,3 +57,42 @@ func getChromePath() string {
 	}
 	return ""
 }
+
+// getBrowserPathForProfile returns the appropriate browser executable for a given browser type.
+// On Linux, we try common binary names for each browser, then fall back to Chrome/Chromium.
+func getBrowserPathForProfile(browserName string) string {
+	switch browserName {
+	case "Brave":
+		for _, name := range []string{"brave-browser", "brave-browser-stable", "brave"} {
+			if path, err := exec.LookPath(name); err == nil {
+				return path
+			}
+		}
+	case "Chrome Canary":
+		// Linux doesn't have an official "Canary" channel in the same way as macOS/Windows.
+		// Some distros package dev/unstable channels with these binary names.
+		for _, name := range []string{"google-chrome-unstable", "google-chrome-dev", "google-chrome-beta"} {
+			if path, err := exec.LookPath(name); err == nil {
+				return path
+			}
+		}
+	case "Edge":
+		for _, name := range []string{"microsoft-edge", "microsoft-edge-stable", "microsoft-edge-beta", "microsoft-edge-dev"} {
+			if path, err := exec.LookPath(name); err == nil {
+				return path
+			}
+		}
+	}
+
+	return getChromePath()
+}
+
+func getCanaryProfilePath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "google-chrome-unstable")
+}
+
+func getBraveProfilePath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "BraveSoftware", "Brave-Browser")
+}
