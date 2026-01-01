@@ -1,0 +1,6 @@
+# 本地环境变量（包含敏感信息），不应提交到仓库
+notebook-podcast-automator/.env
+
+# 运行时数据（去重状态/备份/临时下载），不应提交到仓库
+notebook-podcast-automator/data/
+notebook-podcast-automator/downloads/
