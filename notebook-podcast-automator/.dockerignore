@@ -1,0 +1,13 @@
+.env
+.env.*
+
+downloads/
+data/
+
+*.tmp
+*.bak
+
+# Large local artifacts not needed for build
+automator.exe
+wechat_dump.html
+test_feed.xml

@@ -1,4 +1,4 @@
-﻿// Package api provides the NotebookLM API client.
+// Package api provides the NotebookLM API client.
 package api
 
 import (
@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -19,6 +20,7 @@ import (
 	pb "notebook-podcast-automator/gen/notebooklm/v1alpha1"
 	"notebook-podcast-automator/gen/service"
 	"notebook-podcast-automator/internal/batchexecute"
+	"notebook-podcast-automator/internal/beprotojson"
 	"notebook-podcast-automator/internal/rpc"
 )
 
@@ -618,6 +620,12 @@ func (c *Client) CreateAudioOverview(projectID string, instructions string) (*Au
 	ctx := context.Background()
 	audioOverview, err := c.orchestrationService.CreateAudioOverview(ctx, req)
 	if err != nil {
+		// Fallback: orchestration service is sometimes unavailable; direct RPC often still works.
+		if isUnavailable(err) {
+			if res, derr := c.createAudioOverviewDirectRPC(projectID, instructions); derr == nil {
+				return res, nil
+			}
+		}
 		return nil, fmt.Errorf("create audio overview: %w", err)
 	}
 	// Convert pb.AudioOverview to AudioOverviewResult
@@ -695,9 +703,14 @@ func (c *Client) createAudioOverviewDirectRPC(projectID string, instructions str
 }
 
 func (c *Client) GetAudioOverview(projectID string) (*AudioOverviewResult, error) {
-	// Try direct RPC first if enabled, as it provides more complete data
-	if c.config.UseDirectRPC {
-		return c.getAudioOverviewDirectRPC(projectID)
+	// Prefer direct RPC: the generated orchestration encoder for GetAudioOverview
+	// currently only sends project_id (omits request_type), and the response shape
+	// does not reliably map to pb.AudioOverview.Content. Direct RPC provides the
+	// actual audio payload when available.
+	if res, err := c.getAudioOverviewDirectRPC(projectID); err == nil {
+		return res, nil
+	} else if c.config.UseDirectRPC {
+		return nil, err
 	}
 
 	req := &pb.GetAudioOverviewRequest{
@@ -707,6 +720,10 @@ func (c *Client) GetAudioOverview(projectID string) (*AudioOverviewResult, error
 	ctx := context.Background()
 	audioOverview, err := c.orchestrationService.GetAudioOverview(ctx, req)
 	if err != nil {
+		// Fallback: orchestration service is sometimes unavailable; direct RPC often still works.
+		if isUnavailable(err) {
+			return c.getAudioOverviewDirectRPC(projectID)
+		}
 		return nil, fmt.Errorf("get audio overview: %w", err)
 	}
 	// Convert pb.AudioOverview to AudioOverviewResult
@@ -719,6 +736,14 @@ func (c *Client) GetAudioOverview(projectID string) (*AudioOverviewResult, error
 		IsReady:   audioOverview.Status != "CREATING", // Infer from Status
 	}
 	return result, nil
+}
+
+func isUnavailable(err error) bool {
+	var apiErr *batchexecute.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode != nil {
+		return apiErr.ErrorCode.Type == batchexecute.ErrorTypeUnavailable
+	}
+	return false
 }
 
 // getAudioOverviewDirectRPC uses direct RPC to get audio overview
@@ -743,30 +768,69 @@ func (c *Client) getAudioOverviewDirectRPCWithType(projectID string, requestType
 	// Parse response
 	var data []interface{}
 	if err := json.Unmarshal(resp, &data); err != nil {
-		return nil, fmt.Errorf("parse response JSON: %w", err)
+		// Some endpoints return a JSON-encoded string that needs a second unmarshal.
+		var strData string
+		if err2 := json.Unmarshal(resp, &strData); err2 != nil {
+			return nil, fmt.Errorf("parse response JSON: %w", err)
+		}
+		if err3 := json.Unmarshal([]byte(strData), &data); err3 != nil {
+			return nil, fmt.Errorf("parse response JSON: %w", err)
+		}
 	}
 
 	result := &AudioOverviewResult{
 		ProjectID: projectID,
 	}
 
-	// Extract fields from response
-	// Response format varies, but typically contains status and data
+	// Extract fields from response.
+	// Observed formats (as of late 2025):
+	// - Newer: [null,null,[statusCode, audioBase64OrNull, audioID, title, ...], ...]
+	// - Older: [[statusString, audioBase64OrURL, title, ...], ...]
+	if len(data) >= 3 {
+		if inner, ok := data[2].([]interface{}); ok && len(inner) > 0 {
+			// statusCode: 3 commonly means "ready/available".
+			switch v := inner[0].(type) {
+			case float64:
+				result.IsReady = int(v) == 3
+			case string:
+				// Some variants may return a string status.
+				result.IsReady = strings.ToUpper(strings.TrimSpace(v)) != "CREATING"
+			}
+			if len(inner) > 1 {
+				if content, ok := inner[1].(string); ok {
+					result.AudioData = content
+				}
+			}
+			if len(inner) > 2 {
+				if id, ok := inner[2].(string); ok {
+					result.AudioID = id
+				}
+			}
+			if len(inner) > 3 {
+				if title, ok := inner[3].(string); ok {
+					result.Title = title
+				}
+			}
+			// If we have actual payload, treat it as ready even if status mapping is off.
+			if strings.TrimSpace(result.AudioData) != "" {
+				result.IsReady = true
+			}
+			return result, nil
+		}
+	}
+
 	if len(data) > 0 {
 		if audioData, ok := data[0].([]interface{}); ok {
-			// Check status
 			if len(audioData) > 0 {
 				if status, ok := audioData[0].(string); ok {
 					result.IsReady = status != "CREATING"
 				}
 			}
-			// Get audio content
 			if len(audioData) > 1 {
 				if content, ok := audioData[1].(string); ok {
 					result.AudioData = content
 				}
 			}
-			// Get title if available
 			if len(audioData) > 2 {
 				if title, ok := audioData[2].(string); ok {
 					result.Title = title
@@ -925,12 +989,9 @@ func (c *Client) CreateVideoOverview(projectID string, instructions string) (*Vi
 // DownloadAudioOverview attempts to download the actual audio file
 // by trying different request types until it finds one with audio data
 func (c *Client) DownloadAudioOverview(projectID string) (*AudioOverviewResult, error) {
-	if !c.config.UseDirectRPC {
-		return nil, fmt.Errorf("audio download requires --direct-rpc flag for now")
-	}
-
 	// Try different request types to find the one that returns audio data
-	requestTypes := []int{0, 1, 2, 3, 4, 5}
+	// NOTE: request_type=1 is observed to return the actual base64 audio data.
+	requestTypes := []int{1, 0, 2, 3, 4, 5}
 
 	for _, requestType := range requestTypes {
 		if c.config.Debug {
@@ -1546,7 +1607,39 @@ func (c *Client) DownloadVideoWithAuth(videoURL, filename string) error {
 	return nil
 }
 
-// ListArtifacts returns artifacts for a project using direct RPC
+// GetArtifact fetches an artifact by ID and decodes it into a protobuf struct.
+func (c *Client) GetArtifact(projectID string, artifactID string) (*pb.Artifact, error) {
+	artifactID = strings.TrimSpace(artifactID)
+	if artifactID == "" {
+		return nil, fmt.Errorf("artifact ID required")
+	}
+
+	resp, err := c.rpc.Do(rpc.Call{
+		ID:         rpc.RPCGetArtifact,
+		Args:       []interface{}{artifactID},
+		NotebookID: projectID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get artifact RPC: %w", err)
+	}
+
+	var result pb.Artifact
+	if err := beprotojson.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("parse artifact response: %w", err)
+	}
+	return &result, nil
+}
+
+// GetArtifactTitle returns the user-visible title for an artifact when available.
+func (c *Client) GetArtifactTitle(projectID string, artifactID string) (string, error) {
+	artifact, err := c.GetArtifact(projectID, artifactID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(artifact.GetNote().GetTitle()), nil
+}
+
+// ListArtifacts returns artifacts for a project using direct RPC.
 func (c *Client) ListArtifacts(projectID string) ([]*pb.Artifact, error) {
 	resp, err := c.rpc.Do(rpc.Call{
 		ID: rpc.RPCListArtifacts,

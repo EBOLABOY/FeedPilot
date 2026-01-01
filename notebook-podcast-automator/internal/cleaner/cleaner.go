@@ -3,7 +3,9 @@ package cleaner
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -32,8 +34,14 @@ func ExtractContent(url string) (string, string, error) {
 }
 
 func fetchHTML(url string) (string, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if shouldBypassProxy(url) {
+		transport.Proxy = nil
+	}
+
 	client := &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: transport,
 	}
 
 	req, _ := http.NewRequest("GET", url, nil)
@@ -55,6 +63,29 @@ func fetchHTML(url string) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+func shouldBypassProxy(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" || host == "localhost" {
+		return true
+	}
+
+	// WeChat is often blocked/unstable when routed via generic proxies; fetch directly.
+	if strings.HasSuffix(host, "weixin.qq.com") {
+		return true
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+
+	return false
 }
 
 func extractTitle(html string) string {

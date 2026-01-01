@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type Credentials struct {
@@ -60,9 +61,6 @@ func DefaultEnsureConfig() EnsureConfig {
 
 func EnsureCredentials(cfg EnsureConfig) (Credentials, error) {
 	token, cookies := loadFromProcessEnv()
-	if token != "" && cookies != "" {
-		return Credentials{AuthToken: token, Cookies: cookies}, nil
-	}
 
 	// Read .env first (project-local override).
 	if cfg.DotenvPath != "" {
@@ -91,6 +89,42 @@ func EnsureCredentials(cfg EnsureConfig) (Credentials, error) {
 			}
 			if cfg.ProfileName == "" {
 				cfg.ProfileName = strings.TrimSpace(kv["NLM_BROWSER_PROFILE"])
+			}
+		}
+	}
+
+	if cookies != "" {
+		refreshMode := strings.ToLower(strings.TrimSpace(os.Getenv("NLM_REFRESH_TOKEN")))
+		forceRefresh := refreshMode == "1" || refreshMode == "true" || refreshMode == "yes"
+		disableRefresh := refreshMode == "0" || refreshMode == "false" || refreshMode == "no"
+
+		shouldRefresh := forceRefresh || token == ""
+		if !shouldRefresh && token != "" {
+			if _, expiryTime, err := ParseAuthToken(token); err == nil {
+				shouldRefresh = time.Until(expiryTime) < 5*time.Minute
+			}
+		}
+
+		if shouldRefresh && !disableRefresh {
+			if freshToken, err := fetchSNlM0eTokenFromWeb(cookies); err == nil && freshToken != "" {
+				token = freshToken
+
+				_ = os.Setenv("NLM_AUTH_TOKEN", token)
+				_ = os.Setenv("NLM_COOKIES", cookies)
+
+				// Persist the refreshed token (best-effort).
+				if cfg.WriteDotenv && cfg.DotenvPath != "" {
+					_ = updateEnvFileKeys(cfg.DotenvPath, map[string]string{
+						"NLM_AUTH_TOKEN": token,
+					})
+				}
+				if cfg.WriteNlmEnv && nlmEnvPath != "" {
+					profile := cfg.ProfileName
+					if profile == "" {
+						profile = "Default"
+					}
+					_ = writeNlmEnvFile(nlmEnvPath, token, cookies, profile)
+				}
 			}
 		}
 	}

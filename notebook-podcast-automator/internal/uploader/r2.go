@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -70,7 +72,7 @@ func (u *R2Uploader) UploadFile(ctx context.Context, localFilePath string, objec
 	defer file.Close()
 
 	// 根据文件扩展名设置 Content-Type
-	contentType := getContentType(localFilePath)
+	contentType := ContentTypeForPath(localFilePath)
 
 	fmt.Printf("   > 正在上传 %s 到 R2 (%s)...\n", filepath.Base(localFilePath), u.BucketName)
 
@@ -85,7 +87,7 @@ func (u *R2Uploader) UploadFile(ctx context.Context, localFilePath string, objec
 	}
 
 	// 拼接返回最终的公开 URL
-	finalURL := fmt.Sprintf("%s/%s", u.PublicURL, objectKey)
+	finalURL := publicURLForObjectKey(u.PublicURL, objectKey)
 	return finalURL, nil
 }
 
@@ -103,12 +105,12 @@ func (u *R2Uploader) UploadBytes(ctx context.Context, data []byte, objectKey str
 		return "", fmt.Errorf("上传失败: %w", err)
 	}
 
-	finalURL := fmt.Sprintf("%s/%s", u.PublicURL, objectKey)
+	finalURL := publicURLForObjectKey(u.PublicURL, objectKey)
 	return finalURL, nil
 }
 
-// getContentType 根据文件扩展名返回 MIME 类型
-func getContentType(filePath string) string {
+// ContentTypeForPath 根据文件扩展名返回 MIME 类型
+func ContentTypeForPath(filePath string) string {
 	ext := filepath.Ext(filePath)
 	switch ext {
 	case ".mp3":
@@ -126,4 +128,20 @@ func getContentType(filePath string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+func publicURLForObjectKey(publicBase string, objectKey string) string {
+	base := strings.TrimRight(strings.TrimSpace(publicBase), "/")
+	key := strings.TrimLeft(strings.TrimSpace(objectKey), "/")
+	if base == "" {
+		return key
+	}
+	if key == "" {
+		return base
+	}
+	parts := strings.Split(key, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return base + "/" + strings.Join(parts, "/")
 }

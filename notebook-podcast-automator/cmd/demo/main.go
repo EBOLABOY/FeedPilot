@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"time"
@@ -55,24 +54,27 @@ func main() {
 	}
 
 	// 4. Feature: Query (提问对话)
-	fmt.Println("\n[3/6] Feature: Query (Chat)")
-	// 等待 Source 处理
-	time.Sleep(2 * time.Second)
-
-	chatResp, err := client.Query(context.Background(), projectID, "What is this text about?")
-	if err != nil {
-		fmt.Printf("   ❌ Query failed: %v\n", err)
+	fmt.Println("\n[3/6] Feature: CreateAudioOverview")
+	prompt := "请用中文生成一段简短的播客式对话，总结这段文本的要点。"
+	if _, err := client.CreateAudioOverview(projectID, prompt); err != nil {
+		fmt.Printf("   ❌ CreateAudioOverview failed: %v\n", err)
 	} else {
-		fmt.Printf("   ✅ Checking Query Response...\n")
-		// client.Query 返回的是 *http.Response 还是解析后的结果？
-		// 检查 Query 签名: func (c *Client) Query(...) (string, error)
-		fmt.Printf("   🤖 AI Answer: %s\n", chatResp)
+		fmt.Printf("   ✅ Audio overview requested.\n")
+	}
+
+	fmt.Println("\n[4/6] Feature: GetAudioOverview (Quick Poll)")
+	time.Sleep(3 * time.Second)
+	overview, err := client.GetAudioOverview(projectID)
+	if err != nil {
+		fmt.Printf("   ❌ GetAudioOverview failed: %v\n", err)
+	} else {
+		fmt.Printf("   ✅ Audio ready=%v dataLen=%d\n", overview.IsReady, len(overview.AudioData))
 	}
 
 	// 5. Feature: List Notebooks
 	// 我们的 client.go 可能没有 ListNotebooks (因为之前的 grep 没找到)
 	// 我们需要去补全它！
-	fmt.Println("\n[4/6] Feature: ListNotebooks")
+	fmt.Println("\n[5/6] Feature: ListNotebooks")
 	fmt.Println("   ℹ️ (Checking if ListNotebooks is implemented...)")
 	// notebooks, err := client.ListNotebooks(context.Background())
 
@@ -81,7 +83,7 @@ func main() {
 	// _, err = client.AddSourceFromFile(projectID, "path/to/test.pdf")
 
 	// 5. Feature: Delete Notebook (Cleanup)
-	fmt.Println("\n[5/6] Feature: DeleteNotebook")
+	fmt.Println("\n[6/6] Feature: DeleteNotebook")
 	err = client.DeleteProjects([]string{projectID})
 	if err != nil {
 		fmt.Printf("   ❌ Delete failed: %v\n", err)

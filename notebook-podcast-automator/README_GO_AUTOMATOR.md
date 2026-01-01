@@ -10,25 +10,100 @@ This project provides a robust, purely Go-based solution to automate the extract
 
 ## Prerequisites
 1.  **Authentication**: You must have `NLM_AUTH_TOKEN` and `NLM_COOKIES` in your `.env` file (migrated from `~/.nlm/env` or manually obtained).
-2.  **Proxy**: Ensure your local proxy is running at `127.0.0.1:10809` (or update code).
+2.  **Proxy (Optional)**: Set `NLM_PROXY_URL` or `HTTP_PROXY`/`HTTPS_PROXY`. If none is set, the server will auto-detect a local proxy at `127.0.0.1:10809`.
 
 ## Usage
 
-### Run the E2E Demo
-The `demo_e2e_full.go` script demonstrates the entire flow:
-1.  Fetches a WeChat article.
-2.  Cleans the content.
-3.  Creates a new NotebookLM project.
-4.  Uploads the text source.
-5.  Triggers Audio Overview generation.
-6.  Polls for completion and downloads the audio.
+### HTTP Service (Single Entry)
+This project is designed to be driven by HTTP only.
+
+- `GET /status`: health + last run snapshot
+- `POST /run`: trigger end-to-end workflow (default input uses `NPA_INPUT_URL`)
+- `noop=true`: 表示本次运行“无新文章/全部被过滤”，属于成功但不产出播客（不会返回 500）
+
+### Daily Scheduler (Built-in)
+Set these env vars to let the server auto-run once per day:
+
+- `NPA_SCHEDULE_AT=06:00`
+- `NPA_SCHEDULE_TZ=Asia/Shanghai` (optional; falls back to `NPA_TZ` or system local time)
+
+### Dedup State (Processed/Skipped)
+The server maintains a local state file to skip articles that were already handled (including those filtered out by rules/LLM):
+
+- `NPA_STATE_PATH=data/state.json` (default)
+- `NPA_STATE_MAX_ENTRIES=100` keeps the state bounded (max 100; oldest entries pruned)
+- `NPA_STATE_DISABLED=true` to disable dedup
+- `NPA_MAX_ENTRIES=50` controls how many *new* entries to process per run (it scans the feed until it finds enough new ones)
 
 ```powershell
-cd "e:\notebookllm 逆向\notebook-podcast-automator"
-go run demo_e2e_full.go
+cd "D:\FeedPilot-1\notebook-podcast-automator"
+go run .
+
+Invoke-RestMethod http://localhost:8080/status
+
+# 基础运行（抓取 -> 生成 -> 下载；若配置了 R2 则自动上传+更新 RSS）
+$body = @{
+  input_url = 'http://192.168.100.3:10082/atom'
+  max_entries = 3
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'application/json' -Body $body
+
+# 规则过滤示例（过滤报名/考试类低价值内容）
+$body = @{
+  input_url = 'http://192.168.100.3:10082/atom'
+  max_entries = 10
+  filter_mode = 'rules'
+  filter_block_keywords = @('报名','考试','招聘','公示')
+  filter_min_content_chars = 800
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'application/json' -Body $body
+
+# LLM 过滤示例（OpenAI 兼容；API Key 仅从环境变量读取）
+# 在 .env 或当前终端设置：
+#   NPA_FILTER_LLM_BASE_URL=https://api.openai.com/v1
+#   NPA_FILTER_LLM_MODEL=gpt-4o-mini
+#   NPA_FILTER_LLM_API_KEY=xxxxx
+$body = @{
+  input_url = 'http://192.168.100.3:10082/atom'
+  max_entries = 10
+  filter_mode = 'llm'
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'application/json' -Body $body
+
+# 推荐：标题初筛（招教/考试等）-> LLM 深度筛选 -> 仅上传保留文章到 NotebookLM
+$body = @{
+  input_url = 'http://192.168.100.3:10082/atom'
+  max_entries = 30
+  filter_mode = 'hybrid'
+  filter_block_keywords = @('招教','考试','报名','招聘','公示')
+  # 不截断（默认就是 0，可省略）
+  filter_llm_max_chars = 0
+} | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'application/json' -Body $body
 ```
+
+## CI: Build & Push to Docker Hub (GitHub Actions)
+This repo includes a workflow that builds the Docker image and pushes it to Docker Hub on every push to the `go-podcast-automator` branch (and on tags `v*`).
+
+### Required GitHub Secrets
+Add these in GitHub: `Settings -> Secrets and variables -> Actions -> Secrets`:
+
+- `DOCKERHUB_USERNAME`: your Docker Hub username (or org name)
+- `DOCKERHUB_TOKEN`: a Docker Hub access token (recommended) or password
+
+### Optional GitHub Variable
+Add this in GitHub: `Settings -> Secrets and variables -> Actions -> Variables`:
+
+- `DOCKERHUB_IMAGE`: override image name (e.g. `yourname/notebook-podcast-automator`)
+
+If not set, the workflow uses `${DOCKERHUB_USERNAME}/notebook-podcast-automator`.
+
+### Image Tags
+- `latest` (from `go-podcast-automator` branch)
+- `sha-<short>`
+- `v*` tags (if you push git tags like `v1.0.0`)
 
 ## Technical Details
 - **WeChat Fetching**: WeChat checks User-Agent strictly. We use a Chrome/Windows User-Agent to ensure access. Proxy is explicitly disabled for WeChat requests to avoid blocking/latency.
-- **Audio Generation**: We use `client.SetUseDirectRPC(true)` to bypass the gRPC "Unavailable" error.
+- **Audio Generation**: The client will fallback to DirectRPC if the orchestration service returns `Unavailable`.
 - **Language Customization**: To generate Chinese podcasts, the "Instruction" prompt must be in Chinese. The demo script has been updated with a Chinese prompt: `"请生成一段深入的中文播客对话..."`.

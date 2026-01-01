@@ -11,6 +11,7 @@ import (
 	"notebook-podcast-automator/internal/api"
 	"notebook-podcast-automator/internal/auth"
 	"notebook-podcast-automator/internal/batchexecute"
+	"notebook-podcast-automator/internal/netutil"
 )
 
 func main() {
@@ -30,8 +31,7 @@ func main() {
 	log.Printf("   Cookies loaded (len: %d)", len(cookies))
 
 	// 2. 设置代理 (如果需要)
-	os.Setenv("HTTP_PROXY", "http://127.0.0.1:10809")
-	os.Setenv("HTTPS_PROXY", "http://127.0.0.1:10809")
+	netutil.MaybeSetLocalProxy()
 
 	// 3. 获取 Token
 	log.Println("2. Ensuring NotebookLM credentials...")
@@ -41,7 +41,7 @@ func main() {
 	}
 	cookies = creds.Cookies
 	authToken := creds.AuthToken
-	log.Printf("   Token retrieved: %s...", authToken[:15])
+	log.Printf("   Token retrieved (len: %d)", len(authToken))
 
 	// 4. 初始化客户端
 	log.Println("3. Initializing Client (Proto/OR Service)...")

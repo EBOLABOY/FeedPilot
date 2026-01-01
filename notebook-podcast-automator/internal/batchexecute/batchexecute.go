@@ -208,7 +208,7 @@ func (c *Client) Execute(rpcs []RPC) (*Response, error) {
 		authHeader := generateSAPISIDHASH(sapisid, origin)
 		req.Header.Set("authorization", authHeader)
 		if c.config.Debug {
-			fmt.Printf("\n[Fix] Added Authorization header: %s\n", authHeader)
+			fmt.Printf("\n[Fix] Added Authorization header (masked)\n")
 		}
 	} else if c.config.Debug {
 		fmt.Printf("\n[Fix] Warning: No SAPISID found in cookies, Authorization header skipped\n")
