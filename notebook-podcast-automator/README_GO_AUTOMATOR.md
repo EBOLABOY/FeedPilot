@@ -19,6 +19,7 @@ This project is designed to be driven by HTTP only.
 
 - `GET /status`: health + last run snapshot
 - `POST /run`: trigger end-to-end workflow (default input uses `NPA_INPUT_URL`)
+- `POST /rss/prune`: 裁剪远端 `feed.xml`（仅在已配置 R2 时生效），用于“只保留最新 N 期节目”
 - `noop=true`: 表示本次运行“无新文章/全部被过滤”，属于成功但不产出播客（不会返回 500）
 
 ### Daily Scheduler (Built-in)
@@ -35,6 +36,11 @@ The server maintains a local state file to skip articles that were already handl
 - `NPA_STATE_DISABLED=true` to disable dedup
 - `NPA_MAX_ENTRIES=50` controls how many *new* entries to process per run (it scans the feed until it finds enough new ones)
 
+### RSS Retention (Optional)
+To keep the RSS feed bounded (e.g. testing), set:
+
+- `PODCAST_MAX_ITEMS=1` keeps only the latest episode in `feed.xml` after each successful update.
+
 ```powershell
 cd "D:\FeedPilot-1\notebook-podcast-automator"
 go run .
@@ -47,6 +53,10 @@ $body = @{
   max_entries = 3
 } | ConvertTo-Json -Depth 6
 Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'application/json' -Body $body
+
+# 仅保留 RSS 最新 1 期节目（会修改 R2 上的 feed.xml）
+$body = @{ max_items = 1 } | ConvertTo-Json -Depth 6
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/rss/prune' -ContentType 'application/json' -Body $body
 
 # 规则过滤示例（过滤报名/考试类低价值内容）
 $body = @{

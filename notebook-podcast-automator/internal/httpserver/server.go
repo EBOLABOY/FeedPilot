@@ -16,6 +16,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"notebook-podcast-automator/internal/netutil"
+	"notebook-podcast-automator/internal/uploader"
 	"notebook-podcast-automator/internal/workflow"
 )
 
@@ -72,6 +73,19 @@ type RunResponse struct {
 	Error  string           `json:"error,omitempty"`
 }
 
+type RSSPruneRequest struct {
+	RSSFilename string `json:"rss_filename,omitempty"`
+	MaxItems    int    `json:"max_items,omitempty"`
+}
+
+type RSSPruneResponse struct {
+	OK          bool   `json:"ok"`
+	RSSFilename string `json:"rss_filename,omitempty"`
+	Kept        int    `json:"kept,omitempty"`
+	Removed     int    `json:"removed,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
 type StatusResponse struct {
 	OK           bool             `json:"ok"`
 	Running      bool             `json:"running"`
@@ -95,6 +109,7 @@ func Run() error {
 	mux.HandleFunc("/status", srv.handleStatus)
 	mux.HandleFunc("/run", srv.handleRun)
 	mux.HandleFunc("/generate", srv.handleRun)
+	mux.HandleFunc("/rss/prune", srv.handleRSSPrune)
 
 	httpSrv := &http.Server{
 		Addr:              httpAddr(),
@@ -183,6 +198,64 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		Noop:   res.Noop,
 		Result: &res,
 		Events: events,
+	})
+}
+
+func (s *Server) handleRSSPrune(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+
+	// Reuse run mutex to avoid concurrent updates to feed.xml while /run is executing.
+	if !s.runMu.TryLock() {
+		writeError(w, http.StatusConflict, "already_running")
+		return
+	}
+	defer s.runMu.Unlock()
+
+	var req RSSPruneRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	filename := strings.TrimSpace(req.RSSFilename)
+	if filename == "" {
+		filename = "feed.xml"
+	}
+	maxItems := req.MaxItems
+	if maxItems <= 0 {
+		maxItems = 1
+	}
+
+	r2, err := uploader.NewR2Uploader()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, RSSPruneResponse{
+			OK:          false,
+			RSSFilename: filename,
+			Error:       err.Error(),
+		})
+		return
+	}
+
+	kept, removed, err := r2.PruneRSS(r.Context(), filename, maxItems)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, RSSPruneResponse{
+			OK:          false,
+			RSSFilename: filename,
+			Error:       err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, RSSPruneResponse{
+		OK:          true,
+		RSSFilename: filename,
+		Kept:        kept,
+		Removed:     removed,
 	})
 }
 
