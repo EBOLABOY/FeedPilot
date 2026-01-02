@@ -54,6 +54,7 @@ type RunRequest struct {
 	FilterStrict          bool     `json:"filter_strict,omitempty"`
 	FilterLLMBaseURL      string   `json:"filter_llm_base_url,omitempty"`
 	FilterLLMModel        string   `json:"filter_llm_model,omitempty"`
+	FilterLLMTitleModel   string   `json:"filter_llm_title_model,omitempty"`
 	FilterLLMMaxChars     int      `json:"filter_llm_max_chars,omitempty"`
 	FilterLLMTimeoutSec   int      `json:"filter_llm_timeout_seconds,omitempty"`
 	FilterLLMRetries      int      `json:"filter_llm_retries,omitempty"`
@@ -278,6 +279,7 @@ func (s *Server) executeRun(ctx context.Context, req RunRequest, logf func(stage
 		FilterStrict:          req.FilterStrict,
 		FilterLLMBaseURL:      req.FilterLLMBaseURL,
 		FilterLLMModel:        req.FilterLLMModel,
+		FilterLLMTitleModel:   req.FilterLLMTitleModel,
 		FilterLLMMaxChars:     req.FilterLLMMaxChars,
 		FilterLLMRetries:      req.FilterLLMRetries,
 	}

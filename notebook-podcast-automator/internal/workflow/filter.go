@@ -24,18 +24,33 @@ const (
 
 var defaultBlockKeywords = []string{
 	"报名",
-	"考试",
 	"招教",
 	"招考",
 	"招聘",
-	"公示",
-	"拟录取",
-	"录取",
+	"岗位表",
+	"资格审查",
 	"准考证",
-	"成绩",
-	"报名入口",
-	"报名时间",
-	"报名截止",
+	"成绩查询",
+	"查分",
+	"分数线",
+	"领证",
+	"拟录取",
+	"拟聘用",
+	"录取名单",
+	"公示",
+	"公告",
+	"招标",
+	"中标",
+	"采购",
+	"征稿",
+	"投稿",
+	"征订",
+	"目录",
+	"索引",
+	"选题指南",
+	"免费领",
+	"优惠",
+	"扫码",
 }
 
 func normalizeFilterMode(mode string) string {
@@ -135,7 +150,7 @@ func filterSources(ctx context.Context, sources []Source, cfg Config, progress P
 		sources = filterSourcesByRules(sources, cfg, progress, markDropped)
 	}
 	if mode == filterModeHybrid {
-		// Hybrid is: title prefilter (cheap) -> LLM deep filter (semantic).
+		// Hybrid is: title prefilter (cheap) -> title LLM quick filter (cheaper) -> LLM deep filter (semantic).
 		// The title prefilter is also applied before extraction to reduce fetching, but we apply it
 		// again here to catch cases where the extracted title differs from the feed title.
 		kept, dropped := prefilterCandidatesByRules(sources, cfg, markDropped)
@@ -143,6 +158,12 @@ func filterSources(ctx context.Context, sources []Source, cfg Config, progress P
 			progress.Report("filter", fmt.Sprintf("prefiltered extracted titles: kept=%d dropped=%d", len(kept), dropped))
 		}
 		sources = kept
+
+		if filtered, err := filterSourcesByLLMTitles(ctx, sources, cfg, progress, markDropped); err != nil {
+			progress.Report("warn", fmt.Sprintf("llm title filter skipped: %v", err))
+		} else {
+			sources = filtered
+		}
 	}
 	if mode == filterModeLLM || mode == filterModeHybrid {
 		filtered, title, err := filterSourcesByLLM(ctx, sources, cfg, progress, markDropped)
@@ -169,6 +190,144 @@ func filterSources(ctx context.Context, sources []Source, cfg Config, progress P
 	}
 
 	return sources, llmTitle, nil
+}
+
+func filterSourcesByLLMTitles(ctx context.Context, sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) ([]Source, error) {
+	if len(sources) == 0 {
+		return sources, nil
+	}
+	model := strings.TrimSpace(cfg.FilterLLMTitleModel)
+	if model == "" {
+		return sources, nil
+	}
+
+	meaningful := make([]Source, 0, len(sources))
+	meaningfulIndex := make([]int, 0, len(sources))
+	skipped := 0
+	for i, src := range sources {
+		t := strings.TrimSpace(src.Title)
+		if t == "" || isLikelyPlaceholderTitle(t) {
+			skipped++
+			continue
+		}
+		meaningful = append(meaningful, src)
+		meaningfulIndex = append(meaningfulIndex, i)
+	}
+	if len(meaningful) == 0 {
+		progress.Report("filter", fmt.Sprintf("llm title filter skipped: no meaningful titles (kept=%d)", len(sources)))
+		return sources, nil
+	}
+
+	apiKey := strings.TrimSpace(cfg.FilterLLMAPIKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("llm title filter enabled but api key is empty; set NPA_FILTER_LLM_API_KEY or OPENAI_API_KEY")
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.FilterLLMBaseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	endpoint := baseURL + "/chat/completions"
+
+	timeout := cfg.FilterLLMTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	retries := cfg.FilterLLMRetries
+	if retries < 0 {
+		retries = 0
+	}
+	if retries > 10 {
+		retries = 10
+	}
+	attempts := retries + 1
+
+	progress.Report("filter", fmt.Sprintf("llm title filtering sources (count=%d skipped=%d model=%s attempts=%d timeout=%s)", len(meaningful), skipped, model, attempts, timeout))
+
+	httpClient := &http.Client{Timeout: timeout}
+
+	var decisions map[int]llmDecision
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			backoff := llmRetryBackoff(attempt - 1)
+			progress.Report("warn", fmt.Sprintf("llm title retrying (attempt=%d/%d after=%s): %v", attempt, attempts, backoff, lastErr))
+			if err := sleepWithContext(ctx, backoff); err != nil {
+				return nil, err
+			}
+		}
+
+		decisions, lastErr = llmDecideTitlesBatch(ctx, httpClient, endpoint, apiKey, model, meaningful)
+		if lastErr == nil {
+			break
+		}
+		if attempt == attempts || !isRetryableLLMError(lastErr) {
+			if attempt == attempts && attempts > 1 {
+				return nil, fmt.Errorf("llm title request failed after %d attempts: %w", attempts, lastErr)
+			}
+			return nil, lastErr
+		}
+	}
+
+	keepFlags := make([]bool, len(sources))
+	for i, src := range sources {
+		t := strings.TrimSpace(src.Title)
+		if t == "" || isLikelyPlaceholderTitle(t) {
+			keepFlags[i] = true
+		}
+	}
+
+	kept := make([]Source, 0, len(sources))
+	dropped := 0
+	for j, src := range meaningful {
+		orig := meaningfulIndex[j]
+		decision, ok := decisions[j]
+		if !ok {
+			progress.Report("warn", fmt.Sprintf("llm title decision missing (keep by default): index=%d title=%s", orig, strings.TrimSpace(src.Title)))
+			keepFlags[orig] = true
+			continue
+		}
+		if decision.Keep {
+			keepFlags[orig] = true
+			continue
+		}
+		if markDropped != nil {
+			markDropped(src, "llm_title:"+strings.TrimSpace(decision.Reason))
+		}
+		progress.Report("filter", fmt.Sprintf("llm title dropped: index=%d title=%s reason=%s", orig, strings.TrimSpace(src.Title), strings.TrimSpace(decision.Reason)))
+	}
+
+	for i, src := range sources {
+		if keepFlags[i] {
+			kept = append(kept, src)
+			continue
+		}
+		dropped++
+	}
+
+	progress.Report("filter", fmt.Sprintf("llm title filtered sources: kept=%d dropped=%d", len(kept), dropped))
+	return kept, nil
+}
+
+func isLikelyPlaceholderTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return true
+	}
+	if !strings.HasPrefix(t, "Article ") {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(t, "Article "))
+	if len(rest) != 8 || rest[2] != ':' || rest[5] != ':' {
+		return true
+	}
+	for _, idx := range []int{0, 1, 3, 4, 6, 7} {
+		if rest[idx] < '0' || rest[idx] > '9' {
+			return true
+		}
+	}
+	return true
 }
 
 func filterSourcesByRules(sources []Source, cfg Config, progress ProgressFunc, markDropped func(Source, string)) []Source {
@@ -399,14 +558,40 @@ type llmBatchResponse struct {
 
 func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint string, apiKey string, model string, sources []Source, maxChars int) (map[int]llmDecision, string, error) {
 	system := strings.Join([]string{
-		"你是中文内容筛选助手，用于将一组文章筛选为“适合做每日播客简报”的素材。",
-		"过滤目标：剔除低信息密度内容，例如：报名/考试/招聘/公示/活动通知/广告营销/纯链接导流等；保留有观点、有事实、有分析、有深度的信息。",
-		"必须对每一篇文章都给出判断（keep 或 drop）。如果不确定，倾向 keep=true。",
-		"同时给出一个播客标题（podcast_title），用于作为音频文件名/播客标题，要求：中文、简洁、8~30字、不要包含日期/时间、不要带引号或书名号。",
-		"podcast_title 必须仅根据 keep=true 的文章生成；禁止参考 keep=false 的文章。如果 keep=true 的文章数量为 0，则 podcast_title 必须为空字符串（\"\"）。",
-		"只输出 JSON（禁止输出代码块、解释文本）。",
-		"JSON 格式示例：{\"podcast_title\":\"...\",\"decisions\":[{\"index\":0,\"keep\":true,\"reason\":\"...\"},{\"index\":1,\"keep\":false,\"reason\":\"...\"}]}（当没有 keep=true 时，podcast_title 为空字符串）。",
-		"reason 不超过 60 字。",
+		"你是专业教育播客的“核心选品主编”，你的任务是筛选出能支撑起一期“兼具宏观视野与实操深度”的高质量播客素材。",
+		"最终目标：为 NotebookLM 提供高信噪比语料，生成内容需让教育从业者感到“有格局”或“可落地”。",
+		"",
+		"【筛选标准（Keep Criteria）】：",
+		"文章必须至少满足以下两类价值之一，方可保留（keep=true）：",
+		"",
+		"1. 宏观视角（Macro Perspective）：",
+		"- 政策深读：不只是转发文件，而是深入解读政策背后的教育逻辑、未来趋势或制度影响（如“强国建设”、“教育数字化”的深度分析）。",
+		"- 行业前瞻：探讨 AI 变革、教育哲学、国际比较等具有长远影响的议题。",
+		"- 底层逻辑：探讨教育本质、文化根源或社会结构对教育的影响。",
+		"",
+		"2. 落地实操（Practical Experience）：",
+		"- 一线案例：包含具体的教学场景、PBL 项目流程、班级管理细节（如“如何解决某个具体学生问题”）。",
+		"- 方法论：可复制的教学工具、心理学应用技巧、具体的教研成果。",
+		"- 真实复盘：一线教师或管理者的真实工作手记，包含成功经验或失败教训的反思。",
+		"",
+		"【剔除标准（Drop Criteria）】：",
+		"满足以下任一维度的文章必须剔除（keep=false）：",
+		"1. 纯情绪/礼仪：单纯的新年贺词、节日祝福、抒情散文（除非其中包含了深刻的年度总结与反思）。",
+		"2. 行政噪音：纯粹的会议通知、名单公示、考试安排、书目索引（无详细书评）。",
+		"3. 空洞说教：只有口号没有路径，或只有理论没有现实连接的“正确的废话”。",
+		"",
+		"【输出要求】：",
+		"1. 必须对每一篇文章都给出判断（keep 或 drop）。如果不确定，倾向 keep=true。",
+		"2. podcast_title 生成规则：",
+		"1) 必须基于 keep=true 的文章生成。",
+		"2) 核心目标：提炼出一个最具“穿透力”的主题，体现“宏观趋势”对“一线实操”的实际影响。",
+		"3) 风格要求：像“得到”或“小宇宙”的热门单集标题，极具吸引力；拒绝平铺直叙，拒绝大杂烩；必须有观点感，最好能击中教育者的痛点或盲点。",
+		"4) 负面约束（Strict Negative Constraints）：绝对禁止使用“汇总”“简报”“合集”“一览”“动态”“几则”“文章”等表示列表的词汇；禁止包含日期/时间（如“2025年”“12月”）；不要带引号或书名号。",
+		"5) 格式限制：中文，8~30字。",
+		"6) 异常处理：若 keep=true 的文章数量为 0，则 podcast_title 为空字符串（\"\"）。",
+		"3. 输出格式：只输出 JSON（禁止输出代码块、解释文本）。",
+		"格式：{\"podcast_title\":\"...\",\"decisions\":[{\"index\":0,\"keep\":true,\"reason\":\"...\"},{\"index\":1,\"keep\":false,\"reason\":\"...\"}]}",
+		"4. reason：必须具体说明该文属于“宏观分析”还是“落地实操”，不超过 60 字。",
 	}, "\n")
 
 	var userContent strings.Builder
@@ -493,6 +678,110 @@ func llmDecideBatch(ctx context.Context, httpClient *http.Client, endpoint strin
 		out[item.Index] = d
 	}
 	return out, compactWhitespace(podcastTitle), nil
+}
+
+func llmDecideTitlesBatch(ctx context.Context, httpClient *http.Client, endpoint string, apiKey string, model string, sources []Source) (map[int]llmDecision, error) {
+	system := strings.Join([]string{
+		"你是教育类内容的“初选过滤器”，仅根据标题和 URL 快速筛选素材。",
+		"你的用户偏好：“宏观教育趋势”与“一线实操经验”。",
+		"",
+		"【筛选逻辑】：",
+		"1. 优先保留（Keep）：",
+		"- 关键词命中：标题包含“解读”、“趋势”、“变革”、“反思”、“案例”、“实践”、“复盘”、“手记”、“策略”、“模型”等。",
+		"- 宏观类：涉及国家政策解读、未来教育形态、教育哲学探讨。",
+		"- 实操类：看起来像是一线教师的具体教学方法、项目式学习（PBL）、心理干预案例。",
+		"- 不确定时：如果标题看起来有实质内容（非纯通知），倾向于 keep=true，交给正文深筛处理。",
+		"",
+		"2. 坚决剔除（Drop）：",
+		"- 纯礼仪类：如“新年献词”、“节日快乐”、“致...的一封信”（除非标题暗示有重磅干货）。",
+		"- 纯信息流：如“目录总览”、“往期回顾”、“报名通知”、“公示”、“放假安排”。",
+		"- 纯宣传：某某领导出席某某会议（无实质议题透露）。",
+		"",
+		"【输出要求】：",
+		"只输出 JSON（禁止输出代码块、解释文本）。",
+		"格式：{\"decisions\":[{\"index\":0,\"keep\":true,\"reason\":\"...\"},{\"index\":1,\"keep\":false,\"reason\":\"...\"}]}",
+		"reason 不超过 40 字。",
+	}, "\n")
+
+	var userContent strings.Builder
+	for i, src := range sources {
+		title := strings.TrimSpace(src.Title)
+		u := strings.TrimSpace(src.URL)
+		_, _ = fmt.Fprintf(&userContent, "=== Article %d ===\n标题：%s\nURL：%s\n\n", i, title, u)
+	}
+
+	reqBody := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": system},
+			{"role": "user", "content": userContent.String()},
+		},
+	}
+
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, httpClient.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	bodyStr := strings.TrimSpace(string(body))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &llmHTTPError{
+			StatusCode:  resp.StatusCode,
+			Status:      resp.Status,
+			ContentType: resp.Header.Get("Content-Type"),
+			Body:        truncateRunes(compactWhitespace(bodyStr), 2048),
+		}
+	}
+
+	var parsed openAIChatCompletionResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, &llmResponseParseError{
+			Err:         err,
+			ContentType: resp.Header.Get("Content-Type"),
+			Snippet:     truncateRunes(compactWhitespace(bodyStr), 256),
+		}
+	}
+	if parsed.Error != nil && strings.TrimSpace(parsed.Error.Message) != "" {
+		return nil, fmt.Errorf("llm error: %s", parsed.Error.Message)
+	}
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("llm response has no choices")
+	}
+
+	items, _, ok := parseLLMBatchResponse(parsed.Choices[0].Message.Content)
+	if !ok {
+		return nil, fmt.Errorf("llm title decisions not parseable")
+	}
+
+	out := make(map[int]llmDecision, len(sources))
+	for _, item := range items {
+		if item.Index < 0 || item.Index >= len(sources) {
+			continue
+		}
+		d := llmDecision{Keep: item.Keep, Reason: strings.TrimSpace(item.Reason)}
+		if d.Reason == "" {
+			d.Reason = "未提供原因"
+		}
+		out[item.Index] = d
+	}
+	return out, nil
 }
 
 func parseLLMDecision(s string) (llmDecision, bool) {

@@ -21,9 +21,6 @@ func ExtractContent(url string) (string, string, error) {
 	}
 
 	title := extractTitle(html)
-	if title == "" {
-		title = fmt.Sprintf("Article %s", time.Now().Format("15:04:05"))
-	}
 
 	content, err := Clean(html)
 	if err != nil {

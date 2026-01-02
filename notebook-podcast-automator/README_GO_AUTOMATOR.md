@@ -85,6 +85,8 @@ Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'ap
 # 在 .env 或当前终端设置：
 #   NPA_FILTER_LLM_BASE_URL=https://api.openai.com/v1
 #   NPA_FILTER_LLM_MODEL=gpt-4o-mini
+#   # 可选：hybrid 模式下启用“标题-only LLM 快速筛选”的廉价模型
+#   NPA_FILTER_LLM_TITLE_MODEL=gpt-4o-mini
 #   NPA_FILTER_LLM_API_KEY=xxxxx
 #   NPA_FILTER_LLM_TIMEOUT_SECONDS=300
 #   NPA_FILTER_LLM_RETRIES=2
@@ -101,6 +103,8 @@ $body = @{
   max_entries = 30
   filter_mode = 'hybrid'
   filter_block_keywords = @('招教','考试','报名','招聘','公示')
+  # 可选：为本次请求指定“标题-only LLM 快速筛选”的廉价模型（否则读取 NPA_FILTER_LLM_TITLE_MODEL）
+  filter_llm_title_model = 'gpt-4o-mini'
   # 不截断（默认就是 0，可省略）
   filter_llm_max_chars = 0
 } | ConvertTo-Json -Depth 6
@@ -131,4 +135,4 @@ If not set, the workflow uses `${DOCKERHUB_USERNAME}/notebook-podcast-automator`
 ## Technical Details
 - **WeChat Fetching**: WeChat checks User-Agent strictly. We use a Chrome/Windows User-Agent to ensure access. Proxy is explicitly disabled for WeChat requests to avoid blocking/latency.
 - **Audio Generation**: The client will fallback to DirectRPC if the orchestration service returns `Unavailable`.
-- **Language Customization**: To generate Chinese podcasts, the "Instruction" prompt must be in Chinese. The demo script has been updated with a Chinese prompt: `"请生成一段深入的中文播客对话..."`.
+- **Language Customization**: To generate Chinese podcasts, the "Instruction" prompt must be in Chinese. Example: `"请生成一段面向一线教师和教育管理者的深度中文播客..."`.

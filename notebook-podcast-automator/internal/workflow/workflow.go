@@ -54,6 +54,7 @@ type Config struct {
 	FilterStrict          bool
 	FilterLLMBaseURL      string
 	FilterLLMModel        string
+	FilterLLMTitleModel   string
 	FilterLLMMaxChars     int
 	FilterLLMTimeout      time.Duration
 	FilterLLMRetries      int
@@ -90,6 +91,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 	if cfg.InputURL == "" {
 		return Result{}, fmt.Errorf("input_url required")
 	}
+	now := time.Now().In(beijingLocation())
 
 	progress.Report("input", "fetching input feed/article")
 	inputBytes, err := fetchBytes(ctx, cfg.InputURL)
@@ -131,7 +133,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 			progress.Report("dedup", fmt.Sprintf("dedup: new=%d skipped=%d", len(candidates), skipped))
 		}
 		if len(candidates) == 0 {
-			return Result{Noop: true, GeneratedAt: time.Now()}, nil
+			return Result{Noop: true, GeneratedAt: now}, nil
 		}
 	} else {
 		candidates = []Source{{URL: cfg.InputURL, Key: entryKey("", cfg.InputURL)}}
@@ -151,7 +153,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 			if cfg.FilterStrict {
 				return Result{}, fmt.Errorf("no candidates left after prefiltering")
 			}
-			return Result{Noop: true, GeneratedAt: time.Now()}, nil
+			return Result{Noop: true, GeneratedAt: now}, nil
 		}
 		candidates = kept
 	}
@@ -171,7 +173,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 		// Extraction can fail for valid-looking entries (e.g. WeChat deleted/blocked pages).
 		// When state is enabled, mark such entries as skipped and treat the run as a noop.
 		if st != nil {
-			return Result{Noop: true, GeneratedAt: time.Now()}, nil
+			return Result{Noop: true, GeneratedAt: now}, nil
 		}
 		return Result{}, fmt.Errorf("no valid content found to process")
 	}
@@ -190,20 +192,20 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 	}
 
 	if len(sources) == 0 {
-		return Result{Noop: true, GeneratedAt: time.Now()}, nil
+		return Result{Noop: true, GeneratedAt: now}, nil
 	}
 
 	podcastTitle := sources[0].Title
 	if isFeed {
-		podcastTitle = fmt.Sprintf("每日简报 %s", time.Now().Format("2006-01-02"))
+		podcastTitle = fmt.Sprintf("每日简报 %s", now.Format("2006-01-02"))
 		if strings.TrimSpace(feedTitle) != "" {
-			podcastTitle = fmt.Sprintf("%s %s", strings.TrimSpace(feedTitle), time.Now().Format("2006-01-02"))
+			podcastTitle = fmt.Sprintf("%s %s", strings.TrimSpace(feedTitle), now.Format("2006-01-02"))
 		}
 	}
 
 	episode := Result{
 		PodcastTitle: podcastTitle,
-		GeneratedAt:  time.Now(),
+		GeneratedAt:  now,
 		Sources:      sources,
 	}
 	episode.Summary = buildSummary(sources)
@@ -349,7 +351,23 @@ func withDefaults(cfg Config) Config {
 		cfg.MaxEntries = 3
 	}
 	if strings.TrimSpace(cfg.AudioPrompt) == "" {
-		cfg.AudioPrompt = "请生成一段深入的中文播客对话。两位主持人（一男一女）用中文讨论这些文章的核心内容，风格轻松自然，寻找它们之间的联系。"
+		now := time.Now().In(beijingLocation())
+		bjNow := now.Format("2006-01-02 15:04:05")
+		cfg.AudioPrompt = strings.TrimSpace(fmt.Sprintf(`当前北京时间：%s（UTC+8）。如果你在节目中提及“今天/日期/星期”，必须以此为准，不要自行推断时区。
+
+请生成一段面向一线教师和教育管理者的深度中文播客。
+
+【重要指令】：
+1. 节目名称是《预见未来》。请在开场白中自然地提及此名称（例如：“欢迎收听《预见未来》，在这里我们一起听见教育新知...”）。
+2. 两位主持人（一男一女，资深教育观察员）不仅要讨论素材中的核心信息，更要重点挖掘“宏观政策/趋势”与“具体落地实操”之间的联系。
+
+【内容要求】：
+- 请避免机械地罗列文章摘要。
+- 核心任务是探讨：大环境的变化（如政策导向、AI趋势、教育变革）如何具体影响学校管理和课堂教学？
+- 结合素材中提到的具体案例，分析这些宏观趋势给一线教育者带来了哪些可落地的启示。
+
+【风格设定】：
+专业、有洞察力，但语言通俗易懂，多用具体的例子来解释抽象的概念。`, bjNow))
 	}
 	if strings.TrimSpace(cfg.ProjectEmoji) == "" {
 		cfg.ProjectEmoji = "🗞️"
@@ -426,6 +444,9 @@ func withDefaults(cfg Config) Config {
 	if strings.TrimSpace(cfg.FilterLLMModel) == "" {
 		cfg.FilterLLMModel = strings.TrimSpace(os.Getenv("NPA_FILTER_LLM_MODEL"))
 	}
+	if strings.TrimSpace(cfg.FilterLLMTitleModel) == "" {
+		cfg.FilterLLMTitleModel = strings.TrimSpace(os.Getenv("NPA_FILTER_LLM_TITLE_MODEL"))
+	}
 	if strings.TrimSpace(cfg.FilterLLMAPIKey) == "" {
 		cfg.FilterLLMAPIKey = strings.TrimSpace(os.Getenv("NPA_FILTER_LLM_API_KEY"))
 		if cfg.FilterLLMAPIKey == "" {
@@ -434,6 +455,13 @@ func withDefaults(cfg Config) Config {
 	}
 
 	return cfg
+}
+
+func beijingLocation() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		return loc
+	}
+	return time.FixedZone("UTC+8", 8*60*60)
 }
 
 func looksLikeFeed(b []byte) bool {
