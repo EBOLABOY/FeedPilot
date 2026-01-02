@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -26,15 +27,23 @@ type RSS struct {
 }
 
 type Channel struct {
-	Title         string      `xml:"title"`
-	Link          string      `xml:"link"`
-	Description   string      `xml:"description"`
-	Language      string      `xml:"language"`
-	LastBuildDate string      `xml:"lastBuildDate,omitempty"`
-	ItunesAuthor  string      `xml:"itunes:author"`
-	ItunesImage   ItunesImage `xml:"itunes:image"`
-	ItunesOwner   ItunesOwner `xml:"itunes:owner"`
-	Items         []Item      `xml:"item"`
+	Title            string           `xml:"title"`
+	Link             string           `xml:"link"`
+	Description      string           `xml:"description"`
+	Language         string           `xml:"language"`
+	LastBuildDate    string           `xml:"lastBuildDate,omitempty"`
+	ItunesAuthor     string           `xml:"itunes:author"`
+	ItunesSummary    string           `xml:"itunes:summary"`
+	ItunesExplicit   string           `xml:"itunes:explicit"`
+	ItunesType       string           `xml:"itunes:type,omitempty"`
+	ItunesCategories []ItunesCategory `xml:"itunes:category"`
+	ItunesImage      ItunesImage      `xml:"itunes:image"`
+	ItunesOwner      ItunesOwner      `xml:"itunes:owner"`
+	Items            []Item           `xml:"item"`
+}
+
+type ItunesCategory struct {
+	Text string `xml:"text,attr"`
 }
 
 type ItunesImage struct {
@@ -65,6 +74,7 @@ type Enclosure struct {
 // ================= 核心逻辑 =================
 
 const itunesNamespaceURL = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+const contentNamespaceURL = "http://purl.org/rss/1.0/modules/content/"
 
 func normalizeRSS(rss *RSS) {
 	if strings.TrimSpace(rss.Version) == "" {
@@ -76,6 +86,103 @@ func normalizeRSS(rss *RSS) {
 	if strings.TrimSpace(rss.Itunes) == "" {
 		rss.Itunes = itunesNamespaceURL
 	}
+
+	if strings.TrimSpace(rss.Content) == "" {
+		rss.Content = contentNamespaceURL
+	}
+}
+
+func retargetRSSPublicBase(rss *RSS, publicBase string) {
+	base := strings.TrimRight(strings.TrimSpace(publicBase), "/")
+	if base == "" {
+		return
+	}
+
+	baseURL, err := url.Parse(base)
+	if err != nil || strings.TrimSpace(baseURL.Scheme) == "" || strings.TrimSpace(baseURL.Host) == "" {
+		return
+	}
+
+	rss.Channel.Link = base
+
+	if strings.TrimSpace(rss.Channel.ItunesImage.Href) == "" {
+		rss.Channel.ItunesImage.Href = base + "/cover.jpg"
+	} else {
+		rss.Channel.ItunesImage.Href = retargetAbsoluteURL(rss.Channel.ItunesImage.Href, baseURL)
+	}
+
+	for i := range rss.Channel.Items {
+		rss.Channel.Items[i].Enclosure.URL = retargetAbsoluteURL(rss.Channel.Items[i].Enclosure.URL, baseURL)
+	}
+}
+
+func applyPodcastChannelConfigFromEnv(rss *RSS, publicBase string) {
+	if rss == nil {
+		return
+	}
+
+	if v := strings.TrimSpace(os.Getenv("PODCAST_TITLE")); v != "" {
+		rss.Channel.Title = v
+	}
+	if v := strings.TrimSpace(os.Getenv("PODCAST_DESCRIPTION")); v != "" {
+		rss.Channel.Description = v
+	}
+	if strings.TrimSpace(rss.Channel.Language) == "" {
+		rss.Channel.Language = "zh-cn"
+	}
+
+	if v := strings.TrimSpace(os.Getenv("PODCAST_AUTHOR")); v != "" {
+		rss.Channel.ItunesAuthor = v
+	}
+	if v := strings.TrimSpace(os.Getenv("PODCAST_OWNER_NAME")); v != "" {
+		rss.Channel.ItunesOwner.Name = v
+	}
+	if v := strings.TrimSpace(os.Getenv("PODCAST_OWNER_EMAIL")); v != "" {
+		rss.Channel.ItunesOwner.Email = v
+	}
+
+	if v := strings.TrimSpace(os.Getenv("PODCAST_ITUNES_SUMMARY")); v != "" {
+		rss.Channel.ItunesSummary = v
+	} else if strings.TrimSpace(rss.Channel.ItunesSummary) == "" {
+		rss.Channel.ItunesSummary = rss.Channel.Description
+	}
+	if v := strings.TrimSpace(os.Getenv("PODCAST_ITUNES_EXPLICIT")); v != "" {
+		rss.Channel.ItunesExplicit = v
+	} else if strings.TrimSpace(rss.Channel.ItunesExplicit) == "" {
+		rss.Channel.ItunesExplicit = "no"
+	}
+	if v := strings.TrimSpace(os.Getenv("PODCAST_ITUNES_TYPE")); v != "" {
+		rss.Channel.ItunesType = v
+	} else if strings.TrimSpace(rss.Channel.ItunesType) == "" {
+		rss.Channel.ItunesType = "episodic"
+	}
+	if v := strings.TrimSpace(os.Getenv("PODCAST_ITUNES_CATEGORY")); v != "" {
+		rss.Channel.ItunesCategories = []ItunesCategory{{Text: v}}
+	} else if len(rss.Channel.ItunesCategories) == 0 {
+		rss.Channel.ItunesCategories = []ItunesCategory{{Text: "Education"}}
+	}
+
+	// Cover URL: allow override, otherwise default to <publicBase>/cover.jpg
+	if v := strings.TrimSpace(os.Getenv("PODCAST_COVER_URL")); v != "" {
+		rss.Channel.ItunesImage.Href = v
+	} else if strings.TrimSpace(rss.Channel.ItunesImage.Href) == "" && strings.TrimSpace(publicBase) != "" {
+		rss.Channel.ItunesImage.Href = strings.TrimRight(strings.TrimSpace(publicBase), "/") + "/cover.jpg"
+	}
+}
+
+func retargetAbsoluteURL(raw string, baseURL *url.URL) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || baseURL == nil {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || strings.TrimSpace(u.Scheme) == "" || strings.TrimSpace(u.Host) == "" {
+		return raw
+	}
+	u.Scheme = baseURL.Scheme
+	u.Host = baseURL.Host
+	u.User = nil
+	return u.String()
 }
 
 // UpdateRSS 下载 feed.xml，追加新条目，然后重新上传
@@ -109,6 +216,8 @@ func (u *R2Uploader) UpdateRSS(ctx context.Context, rssFilename string, newItem 
 	// 更新 LastBuildDate
 	rss.Channel.LastBuildDate = time.Now().Format(time.RFC1123Z)
 
+	applyPodcastChannelConfigFromEnv(&rss, u.PublicURL)
+	retargetRSSPublicBase(&rss, u.PublicURL)
 	normalizeRSS(&rss)
 
 	// 3. 序列化回 XML
@@ -160,6 +269,8 @@ func (u *R2Uploader) PruneRSS(ctx context.Context, rssFilename string, maxItems 
 	total := len(rss.Channel.Items)
 	if total <= maxItems {
 		rss.Channel.LastBuildDate = time.Now().Format(time.RFC1123Z)
+		applyPodcastChannelConfigFromEnv(&rss, u.PublicURL)
+		retargetRSSPublicBase(&rss, u.PublicURL)
 		finalXML, err := marshalRSS(rss)
 		if err != nil {
 			return 0, 0, err
@@ -173,6 +284,8 @@ func (u *R2Uploader) PruneRSS(ctx context.Context, rssFilename string, maxItems 
 	removed = total - maxItems
 	rss.Channel.Items = rss.Channel.Items[:maxItems]
 	rss.Channel.LastBuildDate = time.Now().Format(time.RFC1123Z)
+	applyPodcastChannelConfigFromEnv(&rss, u.PublicURL)
+	retargetRSSPublicBase(&rss, u.PublicURL)
 
 	finalXML, err := marshalRSS(rss)
 	if err != nil {
@@ -227,23 +340,38 @@ func (u *R2Uploader) createNewRSS() RSS {
 	author := getEnvOrDefault("PODCAST_AUTHOR", "AI Assistant")
 	ownerName := getEnvOrDefault("PODCAST_OWNER_NAME", "Admin")
 	ownerEmail := getEnvOrDefault("PODCAST_OWNER_EMAIL", "admin@example.com")
+	summary := getEnvOrDefault("PODCAST_ITUNES_SUMMARY", description)
+	explicit := getEnvOrDefault("PODCAST_ITUNES_EXPLICIT", "no")
+	itype := getEnvOrDefault("PODCAST_ITUNES_TYPE", "episodic")
+	category := getEnvOrDefault("PODCAST_ITUNES_CATEGORY", "Education")
+	coverURL := strings.TrimSpace(os.Getenv("PODCAST_COVER_URL"))
+	if coverURL == "" {
+		coverURL = strings.TrimRight(strings.TrimSpace(u.PublicURL), "/") + "/cover.jpg"
+	}
 
 	return RSS{
 		Version: "2.0",
 		Itunes:  itunesNamespaceURL,
+		Content: contentNamespaceURL,
 		Channel: Channel{
-			Title:         title,
-			Link:          u.PublicURL,
-			Description:   description,
-			Language:      "zh-cn",
-			LastBuildDate: time.Now().Format(time.RFC1123Z),
-			ItunesAuthor:  author,
+			Title:          title,
+			Link:           u.PublicURL,
+			Description:    description,
+			Language:       "zh-cn",
+			LastBuildDate:  time.Now().Format(time.RFC1123Z),
+			ItunesAuthor:   author,
+			ItunesSummary:  summary,
+			ItunesExplicit: explicit,
+			ItunesType:     itype,
+			ItunesCategories: []ItunesCategory{
+				{Text: category},
+			},
 			ItunesOwner: ItunesOwner{
 				Name:  ownerName,
 				Email: ownerEmail,
 			},
 			ItunesImage: ItunesImage{
-				Href: u.PublicURL + "/cover.jpg",
+				Href: coverURL,
 			},
 			Items: []Item{},
 		},

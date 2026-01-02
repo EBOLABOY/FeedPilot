@@ -72,7 +72,7 @@ __Secure-BUCKET=xxx; NID=xxx; HSID=xxx; SSID=xxx; APISID=xxx; SAPISID=xxx; ...
 
 1. 用文本编辑器打开项目根目录下的 `.env` 文件：
    ```
-   E:\notebookllm 逆向\notebook-podcast-automator\.env
+   D:\FeedPilot-1\notebook-podcast-automator\.env
    ```
 
 2. 找到 `NLM_COOKIES=` 这一行
@@ -96,13 +96,18 @@ __Secure-BUCKET=xxx; NID=xxx; HSID=xxx; SSID=xxx; APISID=xxx; SAPISID=xxx; ...
 在项目目录下执行：
 
 ```powershell
-go run main.go
+go run .
 ```
 
-或使用测试 Feed：
+然后通过 HTTP 触发一次完整流程（示例）：
 
 ```powershell
-go run main.go test_feed.xml
+$body = @{
+  input_url = "http://192.168.100.3:10082/atom"
+  max_entries = 10
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/run -ContentType "application/json" -Body $body
 ```
 
 ---
@@ -112,11 +117,8 @@ go run main.go test_feed.xml
 如果看到以下输出，说明 Cookies 更新成功：
 
 ```
-[0/9] Executing nlm_upstream auth flow...
-   > Found Token via SNlM0e: [ANTfIj1PbQ...]
-   ✅ Auth flow success. Token: [ANTfIj1PbQ...]
-[1/9] Detected RSS Feed: test_feed.xml
-   > Found 3 entries. Processing top 3...
+[workflow] auth: ensuring NotebookLM credentials
+[workflow] notebooklm: creating NotebookLM project
 ```
 
 ---
@@ -156,7 +158,7 @@ Google 的认证 Cookies 通常 **24-48 小时** 过期。如果你需要长期�
 |------|------|
 | `.env` | 存放 Cookies 和其他配置 |
 | `.env.example` | 配置文件模板 |
-| `internal/auth/scraper.go` | Token 提取逻辑 |
+| `internal/auth/auth.go` | NotebookLM 请求与鉴权逻辑 |
 | `internal/auth/refresh.go` | 凭证刷新逻辑 |
 
 ---
@@ -168,4 +170,4 @@ Google 的认证 Cookies 通常 **24-48 小时** 过期。如果你需要长期�
 
 ---
 
-*最后更新：2025-12-31*
+*最后更新：2026-01-02*

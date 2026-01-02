@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  automator:
+    # 拉取镜像部署：直接使用 Docker Hub 镜像
+    image: "1242772513/notebook-podcast-automator:latest"
+    container_name: notebook-podcast-automator
+    env_file:
+      - .env
+    environment:
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./data:/app/data
+    restart: unless-stopped

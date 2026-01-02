@@ -4,7 +4,7 @@ This project provides a robust, purely Go-based solution to automate the extract
 
 ## Key Features
 1.  **WeChat Extraction**: Uses a specific `User-Agent` to bypass anti-scraping, implemented with standard `net/http` and `goquery`. No headless browser required for fetching.
-2.  **Smart Cleaning**: Custom HTML cleaner (ported from FeedPilot) to extract relevant article content.
+2.  **Smart Cleaning**: Custom HTML cleaner to extract relevant article content.
 3.  **NotebookLM Integration**: Full API client implementation including specific fixes for Audio Generation (DirectRPC fallback).
 4.  **Network Handling**: Optimized network configuration (Bypass proxy for WeChat, Use proxy for Google).
 
@@ -40,6 +40,19 @@ The server maintains a local state file to skip articles that were already handl
 To keep the RSS feed bounded (e.g. testing), set:
 
 - `PODCAST_MAX_ITEMS=1` keeps only the latest episode in `feed.xml` after each successful update.
+
+### Apple Podcasts (RSS / Metadata)
+Apple Podcasts Connect pulls show-level metadata from the RSS `<channel>` (e.g. artist/author, owner, cover).
+Set these in `.env`, then trigger a rewrite (e.g. `POST /rss/prune`) to update `feed.xml` on R2:
+
+- `PODCAST_AUTHOR` (required by Apple as "Artist")
+- `PODCAST_OWNER_NAME`, `PODCAST_OWNER_EMAIL` (required for verification)
+- `PODCAST_COVER_URL` (optional; defaults to `<R2_PUBLIC_URL>/cover.jpg`)
+  - Cover must be JPG/PNG, **3000x3000**, RGB, and the host must support **HTTP HEAD** and **Range** requests.
+- `PODCAST_ITUNES_CATEGORY` (recommended; defaults to `Education`)
+- `PODCAST_ITUNES_EXPLICIT` (recommended; defaults to `no`)
+- `PODCAST_ITUNES_TYPE` (optional; defaults to `episodic`)
+- `PODCAST_ITUNES_SUMMARY` (optional; defaults to `PODCAST_DESCRIPTION`)
 
 ```powershell
 cd "D:\FeedPilot-1\notebook-podcast-automator"

@@ -4,3 +4,13 @@ notebook-podcast-automator/.env
 # 运行时数据（去重状态/备份/临时下载），不应提交到仓库
 notebook-podcast-automator/data/
 notebook-podcast-automator/downloads/
+
+# 上游/历史目录（已不再使用）
+FeedPilot/
+nlm_upstream/
+
+# 构建产物/临时文件
+notebook-podcast-automator/automator
+notebook-podcast-automator/automator.exe
+notebook-podcast-automator/wechat_dump.html
+notebook-podcast-automator/*_tmp.go

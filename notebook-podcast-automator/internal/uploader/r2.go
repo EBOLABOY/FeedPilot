@@ -28,7 +28,7 @@ func NewR2Uploader() (*R2Uploader, error) {
 	accessKey := os.Getenv("R2_ACCESS_KEY_ID")
 	secretKey := os.Getenv("R2_SECRET_ACCESS_KEY")
 	bucketName := os.Getenv("R2_BUCKET_NAME")
-	publicURL := os.Getenv("R2_PUBLIC_URL")
+	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("R2_PUBLIC_URL")), "/")
 
 	if accountID == "" || accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("R2 配置不完整，请检查 R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY")
