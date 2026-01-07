@@ -220,12 +220,7 @@ func Run(ctx context.Context, cfg Config, progress ProgressFunc) (Result, error)
 	}
 
 	progress.Report("notebooklm", "creating NotebookLM project")
-	nlmTransport := http.DefaultTransport.(*http.Transport).Clone()
-	nlmHTTPClient := &http.Client{
-		Timeout:   90 * time.Second,
-		Transport: nlmTransport,
-	}
-	client := api.New(creds.AuthToken, creds.Cookies, batchexecute.WithHTTPClient(nlmHTTPClient))
+	client := api.New(creds.AuthToken, creds.Cookies, batchexecute.WithTimeout(90*time.Second))
 	notebook, err := client.CreateProject(episode.PodcastTitle, cfg.ProjectEmoji)
 	if err != nil {
 		return Result{}, err

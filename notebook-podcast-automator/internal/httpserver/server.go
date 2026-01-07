@@ -105,6 +105,7 @@ func Run() error {
 	netutil.MaybeSetLocalProxy()
 
 	srv := &Server{}
+	srv.startNlmKeepaliveIfConfigured()
 	srv.startSchedulerIfConfigured()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", srv.handleStatus)

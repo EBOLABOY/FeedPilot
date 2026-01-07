@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"notebook-podcast-automator/internal/cookieutil"
 )
 
 // ErrUnauthorized represent an unauthorized request.
@@ -197,10 +199,19 @@ func (c *Client) Execute(rpcs []RPC) (*Response, error) {
 	for k, v := range c.config.Headers {
 		req.Header.Set(k, v)
 	}
-	req.Header.Set("cookie", c.config.Cookies)
+
+	cookies := cookieutil.NormalizeCookieHeader(c.getCookies())
+	if allowlist := strings.TrimSpace(os.Getenv("NLM_COOKIE_ALLOWLIST")); allowlist != "" {
+		if filtered, _ := cookieutil.FilterCookieHeader(cookies, allowlist); strings.TrimSpace(filtered) != "" {
+			cookies = cookieutil.NormalizeCookieHeader(filtered)
+		} else {
+			cookies = ""
+		}
+	}
+	req.Header.Set("cookie", cookies)
 
 	// Fix: Generate and set Authorization header if SAPISID is present
-	if sapisid := extractSAPISID(c.config.Cookies); sapisid != "" {
+	if sapisid := extractSAPISID(cookies); sapisid != "" {
 		origin := "https://notebooklm.google.com"
 		if o, ok := c.config.Headers["origin"]; ok {
 			origin = o
@@ -288,6 +299,12 @@ func (c *Client) Execute(rpcs []RPC) (*Response, error) {
 		return nil, fmt.Errorf("all retry attempts failed: %w", lastErr)
 	}
 	defer resp.Body.Close()
+
+	if setCookieHeaders := resp.Header.Values("Set-Cookie"); len(setCookieHeaders) > 0 {
+		if changed := c.mergeSetCookieHeaders(setCookieHeaders); c.config.Debug && len(changed) > 0 {
+			fmt.Printf("\nMerged Set-Cookie into Cookie header: %s\n", strings.Join(changed, ","))
+		}
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -565,6 +582,9 @@ type Client struct {
 	httpClient *http.Client
 	debug      func(format string, args ...interface{})
 	reqid      *ReqIDGenerator
+
+	cookiesMu      sync.RWMutex
+	syncCookiesEnv bool
 }
 
 // NewClient creates a new batchexecute client
@@ -580,12 +600,60 @@ func NewClient(config Config, opts ...Option) *Client {
 		config.RetryMaxDelay = 10 * time.Second
 	}
 
+	var httpClient *http.Client
+	var err error
+
+	// Create the fingerprinted client by default
+	// This uses the bogdanfinn/tls-client to spoof Chrome's TLS fingerprint (JA3/JA4)
+	proxyURL := strings.TrimSpace(os.Getenv("NLM_PROXY_URL"))
+	if proxyURL == "" {
+		proxyURL = strings.TrimSpace(os.Getenv("HTTPS_PROXY"))
+	}
+	if proxyURL == "" {
+		proxyURL = strings.TrimSpace(os.Getenv("HTTP_PROXY"))
+	}
+	httpClient, err = NewFingerprintedClient(config.RetryMaxDelay*2, proxyURL)
+	if err != nil {
+		// Fallback to standard client if fingerprint client is unavailable.
+		httpClient = &http.Client{Timeout: config.RetryMaxDelay * 2}
+	}
+	httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
 	c := &Client{
 		config:     config,
-		httpClient: http.DefaultClient,
+		httpClient: httpClient,
 		debug:      func(format string, args ...interface{}) {}, // noop by default
 		reqid:      NewReqIDGenerator(),
 	}
+
+	if envCookies := cookieutil.NormalizeCookieHeader(strings.TrimSpace(os.Getenv("NLM_COOKIES"))); envCookies != "" {
+		cfgCookies := cookieutil.NormalizeCookieHeader(strings.TrimSpace(config.Cookies))
+		c.syncCookiesEnv = envCookies == cfgCookies
+	}
+
+	// Initialize with default headers if not provided
+	if c.config.Headers == nil {
+		c.config.Headers = make(map[string]string)
+	}
+
+	// Add default browser-like headers to reduce risk of immediate cookie expiration
+	// Note: User-Agent is handled by the tls-client profile, so we don't set it here explicitly
+	// to avoid conflicts or double-setting.
+	defaultHeaders := map[string]string{
+		"Sec-Ch-Ua":          `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`,
+		"Sec-Ch-Ua-Mobile":   "?0",
+		"Sec-Ch-Ua-Platform": `"Windows"`,
+		"Accept-Language":    "en-US,en;q=0.9",
+	}
+
+	for k, v := range defaultHeaders {
+		if _, exists := c.config.Headers[k]; !exists {
+			c.config.Headers[k] = v
+		}
+	}
+
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -594,6 +662,35 @@ func NewClient(config Config, opts ...Option) *Client {
 
 func (c *Client) Config() Config {
 	return c.config
+}
+
+func (c *Client) getCookies() string {
+	c.cookiesMu.RLock()
+	defer c.cookiesMu.RUnlock()
+	return c.config.Cookies
+}
+
+func (c *Client) mergeSetCookieHeaders(setCookieHeaders []string) []string {
+	if len(setCookieHeaders) == 0 {
+		return nil
+	}
+
+	c.cookiesMu.Lock()
+	defer c.cookiesMu.Unlock()
+
+	current := cookieutil.NormalizeCookieHeader(c.config.Cookies)
+	updated, changed := cookieutil.MergeSetCookieHeaders(current, setCookieHeaders)
+	updated = strings.TrimSpace(updated)
+	if updated == "" || updated == current {
+		return nil
+	}
+
+	c.config.Cookies = updated
+	if c.syncCookiesEnv {
+		_ = os.Setenv("NLM_COOKIES", updated)
+	}
+
+	return changed
 }
 
 // ReqIDGenerator generates sequential request IDs

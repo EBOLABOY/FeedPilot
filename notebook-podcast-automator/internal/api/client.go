@@ -21,6 +21,7 @@ import (
 	"notebook-podcast-automator/gen/service"
 	"notebook-podcast-automator/internal/batchexecute"
 	"notebook-podcast-automator/internal/beprotojson"
+	"notebook-podcast-automator/internal/cookieutil"
 	"notebook-podcast-automator/internal/rpc"
 )
 
@@ -1550,7 +1551,11 @@ func (c *Client) DownloadVideoWithAuth(videoURL, filename string) error {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 
 	// Get cookies from environment (same as nlm client uses)
-	cookies := os.Getenv("NLM_COOKIES")
+	cookies := cookieutil.NormalizeCookieHeader(os.Getenv("NLM_COOKIES"))
+	if allowlist := strings.TrimSpace(os.Getenv("NLM_COOKIE_ALLOWLIST")); allowlist != "" {
+		cookies, _ = cookieutil.FilterCookieHeader(cookies, allowlist)
+		cookies = cookieutil.NormalizeCookieHeader(cookies)
+	}
 	if cookies != "" {
 		req.Header.Set("Cookie", cookies)
 	}

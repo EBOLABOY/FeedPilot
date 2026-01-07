@@ -97,6 +97,7 @@ func EnsureCredentials(cfg EnsureConfig) (Credentials, error) {
 		refreshMode := strings.ToLower(strings.TrimSpace(os.Getenv("NLM_REFRESH_TOKEN")))
 		forceRefresh := refreshMode == "1" || refreshMode == "true" || refreshMode == "yes"
 		disableRefresh := refreshMode == "0" || refreshMode == "false" || refreshMode == "no"
+		browserAuthOnRefreshFail := strings.EqualFold(strings.TrimSpace(os.Getenv("NLM_BROWSER_AUTH_ON_REFRESH_FAIL")), "true")
 
 		shouldRefresh := forceRefresh || token == ""
 		if !shouldRefresh && token != "" {
@@ -106,17 +107,22 @@ func EnsureCredentials(cfg EnsureConfig) (Credentials, error) {
 		}
 
 		if shouldRefresh && !disableRefresh {
-			if freshToken, err := fetchSNlM0eTokenFromWeb(cookies); err == nil && freshToken != "" {
+			if freshToken, refreshedCookies, err := fetchSNlM0eTokenFromWeb(cookies); err == nil && freshToken != "" {
 				token = freshToken
+				if strings.TrimSpace(refreshedCookies) != "" {
+					cookies = strings.TrimSpace(refreshedCookies)
+				}
 
 				_ = os.Setenv("NLM_AUTH_TOKEN", token)
 				_ = os.Setenv("NLM_COOKIES", cookies)
 
 				// Persist the refreshed token (best-effort).
 				if cfg.WriteDotenv && cfg.DotenvPath != "" {
-					_ = updateEnvFileKeys(cfg.DotenvPath, map[string]string{
-						"NLM_AUTH_TOKEN": token,
-					})
+					updates := map[string]string{"NLM_AUTH_TOKEN": token}
+					if strings.EqualFold(strings.TrimSpace(os.Getenv("NLM_PERSIST_COOKIES")), "true") {
+						updates["NLM_COOKIES"] = cookies
+					}
+					_ = updateEnvFileKeys(cfg.DotenvPath, updates)
 				}
 				if cfg.WriteNlmEnv && nlmEnvPath != "" {
 					profile := cfg.ProfileName
@@ -125,6 +131,9 @@ func EnsureCredentials(cfg EnsureConfig) (Credentials, error) {
 					}
 					_ = writeNlmEnvFile(nlmEnvPath, token, cookies, profile)
 				}
+			} else if err != nil && browserAuthOnRefreshFail && strings.Contains(err.Error(), "ServiceLogin") {
+				token = ""
+				cookies = ""
 			}
 		}
 	}

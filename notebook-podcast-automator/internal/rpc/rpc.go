@@ -1,8 +1,10 @@
-﻿package rpc
+package rpc
 
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"notebook-podcast-automator/internal/batchexecute"
 
@@ -104,6 +106,15 @@ type Client struct {
 // New creates a new NotebookLM RPC client
 // New creates a new NotebookLM RPC client
 func New(authToken, cookies string, options ...batchexecute.Option) *Client {
+	bl := strings.TrimSpace(os.Getenv("NLM_BL"))
+	if bl == "" {
+		bl = "boq_labs-tailwind-frontend_20250903.07_p0"
+	}
+	fsid := strings.TrimSpace(os.Getenv("NLM_F_SID"))
+	if fsid == "" {
+		fsid = "-7121977511756781186"
+	}
+
 	config := batchexecute.Config{
 		Host:      "notebooklm.google.com",
 		App:       "LabsTailwindUi",
@@ -120,9 +131,8 @@ func New(authToken, cookies string, options ...batchexecute.Option) *Client {
 			"pragma":          "no-cache",
 		},
 		URLParams: map[string]string{
-			// Update to January 2025 build version
-			"bl":    "boq_labs-tailwind-frontend_20250903.07_p0",
-			"f.sid": "-7121977511756781186",
+			"bl":    bl,
+			"f.sid": fsid,
 			"hl":    "en",
 			// Omit rt parameter for JSON array format (easier to parse)
 			// "rt":    "c",  // Use "c" for chunked format, omit for JSON array
