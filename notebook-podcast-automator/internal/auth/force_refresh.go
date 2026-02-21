@@ -13,6 +13,8 @@ import (
 // an error if the web refresh fails (e.g. cookies already expired and redirect to ServiceLogin).
 func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 	token, cookies := loadFromProcessEnv()
+	sessionID := strings.TrimSpace(os.Getenv("NLM_F_SID"))
+	buildLabel := strings.TrimSpace(os.Getenv("NLM_BL"))
 
 	// Read .env first (project-local override).
 	if cfg.DotenvPath != "" {
@@ -25,6 +27,12 @@ func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 			}
 			if cfg.ProfileName == "" {
 				cfg.ProfileName = strings.TrimSpace(kv["NLM_BROWSER_PROFILE"])
+			}
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(kv["NLM_F_SID"])
+			}
+			if buildLabel == "" {
+				buildLabel = strings.TrimSpace(kv["NLM_BL"])
 			}
 		}
 	}
@@ -42,6 +50,12 @@ func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 			if cfg.ProfileName == "" {
 				cfg.ProfileName = strings.TrimSpace(kv["NLM_BROWSER_PROFILE"])
 			}
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(kv["NLM_F_SID"])
+			}
+			if buildLabel == "" {
+				buildLabel = strings.TrimSpace(kv["NLM_BL"])
+			}
 		}
 	}
 
@@ -50,7 +64,7 @@ func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 		return Credentials{}, fmt.Errorf("cookies required")
 	}
 
-	freshToken, refreshedCookies, err := fetchSNlM0eTokenFromWeb(cookies)
+	freshToken, freshSessionID, freshBuildLabel, refreshedCookies, err := fetchSNlM0eTokenFromWeb(cookies)
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -63,9 +77,16 @@ func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 	if strings.TrimSpace(refreshedCookies) != "" {
 		cookies = strings.TrimSpace(refreshedCookies)
 	}
+	if sid := strings.TrimSpace(freshSessionID); sid != "" {
+		sessionID = sid
+	}
+	if bl := strings.TrimSpace(freshBuildLabel); bl != "" {
+		buildLabel = bl
+	}
 
 	_ = os.Setenv("NLM_AUTH_TOKEN", token)
 	_ = os.Setenv("NLM_COOKIES", cookies)
+	setSessionMetaEnv(sessionID, buildLabel)
 
 	// Persist refreshed token/cookies (best-effort).
 	if cfg.WriteDotenv && cfg.DotenvPath != "" {
@@ -73,6 +94,7 @@ func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 		if strings.EqualFold(strings.TrimSpace(os.Getenv("NLM_PERSIST_COOKIES")), "true") {
 			updates["NLM_COOKIES"] = cookies
 		}
+		updates = addSessionMetaUpdates(updates, sessionID, buildLabel)
 		_ = updateEnvFileKeys(cfg.DotenvPath, updates)
 	}
 	if cfg.WriteNlmEnv && nlmEnvPath != "" {
@@ -80,9 +102,8 @@ func ForceRefreshFromWeb(cfg EnsureConfig) (Credentials, error) {
 		if profile == "" {
 			profile = "Default"
 		}
-		_ = writeNlmEnvFile(nlmEnvPath, token, cookies, profile)
+		_ = writeNlmEnvFile(nlmEnvPath, token, cookies, profile, addSessionMetaUpdates(nil, sessionID, buildLabel))
 	}
 
 	return Credentials{AuthToken: token, Cookies: cookies}, nil
 }
-

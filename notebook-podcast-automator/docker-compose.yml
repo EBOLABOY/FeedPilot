@@ -9,9 +9,22 @@ services:
     environment:
       - HTTP_PROXY=${HTTP_PROXY}
       - HTTPS_PROXY=${HTTPS_PROXY}
+      - NLM_KEEPALIVE_INTERVAL=${NLM_KEEPALIVE_INTERVAL:-6h}
+      - NLM_KEEPALIVE_PERSIST=${NLM_KEEPALIVE_PERSIST:-true}
+      - NLM_PERSIST_COOKIES=${NLM_PERSIST_COOKIES:-true}
+      - NLM_DISABLE_WEB_SESSION_REFRESH=${NLM_DISABLE_WEB_SESSION_REFRESH:-false}
+      - NLM_BROWSER_AUTH_ON_REFRESH_FAIL=${NLM_BROWSER_AUTH_ON_REFRESH_FAIL:-true}
+      - NLM_BROWSER_KEEP_OPEN_SECONDS=${NLM_BROWSER_KEEP_OPEN_SECONDS:-600}
+      - NLM_ENABLE_VNC_BROWSER=${NLM_ENABLE_VNC_BROWSER:-true}
+      - NLM_BROWSER_HEADLESS=${NLM_BROWSER_HEADLESS:-false}
+      - NLM_VNC_PORT=${NLM_VNC_PORT:-5900}
     ports:
       - "8080:8080"
+      - "${NLM_VNC_PORT:-5900}:5900"
     volumes:
+      - ./.env:/app/.env
+      - ./.nlm:/root/.nlm
+      - ./.browser-profile:/root/.config
       - ./downloads:/app/downloads
       - ./data:/app/data
     restart: unless-stopped

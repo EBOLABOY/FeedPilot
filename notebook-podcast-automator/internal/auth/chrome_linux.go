@@ -21,6 +21,17 @@ func detectChrome(debug bool) Browser {
 		}
 	}
 
+	// Chromium package on some distros/alpine
+	if path, err := exec.LookPath("chromium-browser"); err == nil {
+		version := getChromeVersion(path)
+		return Browser{
+			Type:    BrowserChrome,
+			Path:    path,
+			Name:    "Chromium",
+			Version: version,
+		}
+	}
+
 	// Try Chromium as fallback
 	if path, err := exec.LookPath("chromium"); err == nil {
 		version := getChromeVersion(path)
@@ -46,11 +57,16 @@ func getChromeVersion(path string) string {
 
 func getProfilePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "google-chrome")
+	chromePath := filepath.Join(home, ".config", "google-chrome")
+	if _, err := os.Stat(chromePath); err == nil {
+		return chromePath
+	}
+	chromiumPath := filepath.Join(home, ".config", "chromium")
+	return chromiumPath
 }
 
 func getChromePath() string {
-	for _, name := range []string{"google-chrome", "chrome", "chromium"} {
+	for _, name := range []string{"google-chrome", "chrome", "chromium-browser", "chromium"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path
 		}

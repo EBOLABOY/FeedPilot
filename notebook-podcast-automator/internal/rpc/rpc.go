@@ -106,14 +106,8 @@ type Client struct {
 // New creates a new NotebookLM RPC client
 // New creates a new NotebookLM RPC client
 func New(authToken, cookies string, options ...batchexecute.Option) *Client {
-	bl := strings.TrimSpace(os.Getenv("NLM_BL"))
-	if bl == "" {
-		bl = "boq_labs-tailwind-frontend_20250903.07_p0"
-	}
-	fsid := strings.TrimSpace(os.Getenv("NLM_F_SID"))
-	if fsid == "" {
-		fsid = "-7121977511756781186"
-	}
+	bl := resolveBL()
+	fsid := resolveFSID()
 
 	config := batchexecute.Config{
 		Host:      "notebooklm.google.com",
@@ -158,6 +152,13 @@ func (c *Client) Do(call Call) (json.RawMessage, error) {
 	urlParams := make(map[string]string)
 	for k, v := range c.Config.URLParams {
 		urlParams[k] = v
+	}
+	// Keep session parameters hot-reloadable for long-lived clients.
+	if bl := resolveBL(); bl != "" {
+		urlParams["bl"] = bl
+	}
+	if fsid := resolveFSID(); fsid != "" {
+		urlParams["f.sid"] = fsid
 	}
 
 	if call.NotebookID != "" {
@@ -211,4 +212,20 @@ func (c *Client) CreateNotebook(title string) (json.RawMessage, error) {
 // DeleteNotebook deletes a notebook by ID
 func (c *Client) DeleteNotebook(id string) error {
 	return fmt.Errorf("not implemented")
+}
+
+func resolveBL() string {
+	bl := strings.TrimSpace(os.Getenv("NLM_BL"))
+	if bl == "" {
+		bl = "boq_labs-tailwind-frontend_20250903.07_p0"
+	}
+	return bl
+}
+
+func resolveFSID() string {
+	fsid := strings.TrimSpace(os.Getenv("NLM_F_SID"))
+	if fsid == "" {
+		fsid = "-7121977511756781186"
+	}
+	return fsid
 }

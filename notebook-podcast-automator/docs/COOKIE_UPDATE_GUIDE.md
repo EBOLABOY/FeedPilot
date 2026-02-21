@@ -1,6 +1,6 @@
 # 🍪 NotebookLM Cookies 手动更新指南
 
-> **适用场景**：当程序报错 `401 Signaler refresh failed` 或 `Request had invalid authentication` 时，说明 Cookies 已过期，需要手动更新。
+> **适用场景**：程序已默认自动刷新 `NLM_AUTH_TOKEN`、`NLM_F_SID`、`NLM_BL`。仅当出现 `401 Signaler refresh failed` 或 `Request had invalid authentication` 且自动刷新失败时，再进行本手动更新。
 
 ---
 
@@ -15,6 +15,36 @@
 | 5 | 重新运行程序 | 10秒 |
 
 **总计：约 2 分钟**
+
+---
+
+## 🤖 先确认自动刷新是否启用
+
+默认情况下，程序会在认证阶段自动从 NotebookLM 页面同步会话参数并尝试刷新凭证。  
+请先检查是否误设置了以下开关：
+
+```env
+NLM_DISABLE_WEB_SESSION_REFRESH=true
+```
+
+如果你希望保持自动同步，请删除该配置或改为 `false`，再重试一次。
+
+---
+
+## 🐳 Docker 交互重登（可选）
+
+如果你在 Docker 中运行，且希望“失效后自动进入可登录页面”，请确保：
+
+```env
+NLM_BROWSER_AUTH_ON_REFRESH_FAIL=true
+NLM_BROWSER_KEEP_OPEN_SECONDS=600
+NLM_ENABLE_VNC_BROWSER=true
+NLM_BROWSER_HEADLESS=false
+NLM_VNC_PORT=5900
+```
+
+当自动刷新失败后，服务会触发容器内浏览器重登流程。  
+使用 VNC 客户端连接到容器 `5900` 端口完成登录，程序会自动提取并持久化鉴权信息。
 
 ---
 
@@ -139,9 +169,8 @@ NLM_COOKIES="__Secure-BUCKET=xxx..."
 ```
 
 ### Q3: Cookies 多久过期一次？
-Google 的认证 Cookies 通常 **24-48 小时** 过期。如果你需要长期自动化运行，建议：
-- 使用 Playwright/Puppeteer 自动化登录刷新
-- 或设置定时任务每天手动更新
+Google 的认证 Cookies 仍可能在 **24-48 小时** 内变化，但本项目会自动刷新 token 和会话参数（`NLM_F_SID` / `NLM_BL`）。  
+因此多数情况下不需要每天手动提取。只有在 Cookies 整体失效、账号状态变化或浏览器登录态失效时，才需要按本文手工更新。
 
 ### Q4: 更新后仍然报 401 错误？
 可能的原因：
@@ -158,8 +187,9 @@ Google 的认证 Cookies 通常 **24-48 小时** 过期。如果你需要长期�
 |------|------|
 | `.env` | 存放 Cookies 和其他配置 |
 | `.env.example` | 配置文件模板 |
-| `internal/auth/auth.go` | NotebookLM 请求与鉴权逻辑 |
-| `internal/auth/refresh.go` | 凭证刷新逻辑 |
+| `internal/auth/credentials.go` | 凭证确保与刷新入口（含会话参数同步） |
+| `internal/auth/webtoken.go` | 从 NotebookLM 页面提取 `SNlM0e` / `FdrFJe` / `bl` |
+| `internal/auth/refresh.go` | 凭证刷新与过期处理逻辑 |
 
 ---
 

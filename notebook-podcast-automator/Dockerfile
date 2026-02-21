@@ -16,12 +16,26 @@ RUN go build -trimpath -buildvcs=false -o automator .
 FROM alpine:latest
 WORKDIR /app
 
-# Install certificates + tzdata for HTTPS and timezone scheduling
-RUN apk --no-cache add ca-certificates tzdata
+# Install runtime deps:
+# - ca-certificates/tzdata for network + scheduling
+# - chromium for interactive re-auth fallback
+# - xvfb/fluxbox/x11vnc for optional containerized browser UI
+RUN apk --no-cache add \
+    ca-certificates \
+    tzdata \
+    chromium \
+    xvfb \
+    fluxbox \
+    x11vnc \
+    dumb-init
 
 COPY --from=builder /app/automator .
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8080
+EXPOSE 5900
 
 # Default command
+ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/docker-entrypoint.sh"]
 CMD ["./automator"]

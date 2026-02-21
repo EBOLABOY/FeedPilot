@@ -13,9 +13,13 @@ import (
 	"notebook-podcast-automator/internal/cookieutil"
 )
 
-var snlm0eRe = regexp.MustCompile(`"SNlM0e"\s*:\s*"([^"]+)"`)
+var (
+	snlm0eRe = regexp.MustCompile(`"SNlM0e"\s*:\s*"([^"]+)"`)
+	fdrfjeRe = regexp.MustCompile(`"FdrFJe"\s*:\s*"([^"]+)"`)
+	blRe     = regexp.MustCompile(`(boq_labs-tailwind-frontend_[A-Za-z0-9._-]+)`)
+)
 
-func fetchSNlM0eTokenFromWeb(cookies string) (token string, refreshedCookies string, err error) {
+func fetchSNlM0eTokenFromWeb(cookies string) (token string, sessionID string, buildLabel string, refreshedCookies string, err error) {
 	originalCookies := cookieutil.NormalizeCookieHeader(cookies)
 	cookies = originalCookies
 	if allowlist := strings.TrimSpace(os.Getenv("NLM_COOKIE_ALLOWLIST")); allowlist != "" {
@@ -23,12 +27,12 @@ func fetchSNlM0eTokenFromWeb(cookies string) (token string, refreshedCookies str
 		cookies = cookieutil.NormalizeCookieHeader(cookies)
 	}
 	if cookies == "" {
-		return "", "", fmt.Errorf("cookies required")
+		return "", "", "", "", fmt.Errorf("cookies required")
 	}
 
 	req, err := http.NewRequest("GET", "https://notebooklm.google.com/", nil)
 	if err != nil {
-		return "", "", fmt.Errorf("create request: %w", err)
+		return "", "", "", "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Cookie", cookies)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -80,22 +84,41 @@ func fetchSNlM0eTokenFromWeb(cookies string) (token string, refreshedCookies str
 			continue
 		}
 
-		m := snlm0eRe.FindSubmatch(body)
-		if len(m) < 2 {
-			lastErr = fmt.Errorf("SNlM0e token not found in notebooklm page")
+		parsedToken, parsedSessionID, parsedBuildLabel, parseErr := extractWebSessionFromHTML(body)
+		if parseErr != nil {
+			lastErr = parseErr
 			continue
 		}
-		token = string(m[1])
-		if len(token) < 20 {
-			lastErr = fmt.Errorf("SNlM0e token too short")
-			continue
-		}
+
+		token = parsedToken
+		sessionID = parsedSessionID
+		buildLabel = parsedBuildLabel
 		refreshedCookies, _ = cookieutil.MergeSetCookieHeaders(originalCookies, setCookieHeaders)
-		return token, refreshedCookies, nil
+		return token, sessionID, buildLabel, refreshedCookies, nil
 	}
 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("fetch notebooklm: no HTTP client available")
 	}
-	return "", "", lastErr
+	return "", "", "", "", lastErr
+}
+
+func extractWebSessionFromHTML(body []byte) (token string, sessionID string, buildLabel string, err error) {
+	m := snlm0eRe.FindSubmatch(body)
+	if len(m) < 2 {
+		return "", "", "", fmt.Errorf("SNlM0e token not found in notebooklm page")
+	}
+	token = strings.TrimSpace(string(m[1]))
+	if len(token) < 20 {
+		return "", "", "", fmt.Errorf("SNlM0e token too short")
+	}
+
+	if sm := fdrfjeRe.FindSubmatch(body); len(sm) >= 2 {
+		sessionID = strings.TrimSpace(string(sm[1]))
+	}
+	if bm := blRe.FindSubmatch(body); len(bm) >= 2 {
+		buildLabel = strings.TrimSpace(string(bm[1]))
+	}
+
+	return token, sessionID, buildLabel, nil
 }

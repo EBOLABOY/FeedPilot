@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -42,8 +43,8 @@ func (c *Client) Execute(req Request) ([]byte, error) {
 
 	// Add query parameters
 	params := url.Values{}
-	params.Set("bl", "boq_labs-tailwind-frontend_20250903.07_p0")
-	params.Set("f.sid", "-2216531235646590877") // This may need to be dynamic
+	params.Set("bl", resolveBL())
+	params.Set("f.sid", resolveFSID())
 	params.Set("hl", "en")
 	params.Set("_reqid", fmt.Sprintf("%d", generateRequestID()))
 	params.Set("rt", "c")
@@ -115,8 +116,8 @@ func (c *Client) Stream(req Request, handler func(chunk []byte) error) error {
 
 	// Add query parameters
 	params := url.Values{}
-	params.Set("bl", "boq_labs-tailwind-frontend_20250903.07_p0")
-	params.Set("f.sid", "-2216531235646590877")
+	params.Set("bl", resolveBL())
+	params.Set("f.sid", resolveFSID())
 	params.Set("hl", "en")
 	params.Set("_reqid", fmt.Sprintf("%d", generateRequestID()))
 	params.Set("rt", "c")
@@ -185,6 +186,22 @@ var requestCounter int
 func generateRequestID() int {
 	requestCounter++
 	return 1000000 + requestCounter
+}
+
+func resolveBL() string {
+	bl := strings.TrimSpace(os.Getenv("NLM_BL"))
+	if bl == "" {
+		bl = "boq_labs-tailwind-frontend_20250903.07_p0"
+	}
+	return bl
+}
+
+func resolveFSID() string {
+	fsid := strings.TrimSpace(os.Getenv("NLM_F_SID"))
+	if fsid == "" {
+		fsid = "-7121977511756781186"
+	}
+	return fsid
 }
 
 // BuildChatRequest builds a request for the GenerateFreeFormStreamed endpoint

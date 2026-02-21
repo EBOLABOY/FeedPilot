@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -54,6 +55,56 @@ func WithPreferredBrowsers(browsers []string) Option {
 }
 func WithCheckNotebooks() Option             { return func(o *Options) { o.CheckNotebooks = true } }
 func WithKeepOpenSeconds(seconds int) Option { return func(o *Options) { o.KeepOpenSeconds = seconds } }
+
+func resolveHeadlessMode(debug bool, keepOpenSeconds int) bool {
+	// Interactive mode must be headful so a human can complete login.
+	if keepOpenSeconds > 0 {
+		return false
+	}
+
+	headless := !debug
+	if raw := strings.TrimSpace(os.Getenv("NLM_BROWSER_HEADLESS")); raw != "" {
+		switch strings.ToLower(raw) {
+		case "1", "true", "yes", "on":
+			headless = true
+		case "0", "false", "no", "off":
+			headless = false
+		}
+	}
+	return headless
+}
+
+func authTimeout(keepOpenSeconds, baseSeconds int) time.Duration {
+	sec := baseSeconds
+	if keepOpenSeconds > 0 {
+		candidate := keepOpenSeconds + 90
+		if candidate > sec {
+			sec = candidate
+		}
+	}
+	if sec < 30 {
+		sec = 30
+	}
+	return time.Duration(sec) * time.Second
+}
+
+const stealthInitScript = `
+Object.defineProperty(navigator, 'webdriver', {
+  get: () => undefined
+});
+window.chrome = window.chrome || { runtime: {} };
+Object.defineProperty(navigator, 'plugins', {
+  get: () => [1, 2, 3, 4, 5]
+});
+Object.defineProperty(navigator, 'languages', {
+  get: () => ['en-US', 'en']
+});
+`
+
+func installStealthHooks(ctx context.Context) error {
+	_, err := page.AddScriptToEvaluateOnNewDocument(stealthInitScript).Do(ctx)
+	return err
+}
 
 // tryMultipleProfiles attempts to authenticate using each profile until one succeeds
 func (ba *BrowserAuth) tryMultipleProfiles(targetURL string) (token, cookies string, err error) {
@@ -128,12 +179,14 @@ func (ba *BrowserAuth) tryMultipleProfiles(targetURL string) (token, cookies str
 		var ctx context.Context
 		var cancel context.CancelFunc
 
+		headless := resolveHeadlessMode(ba.debug, ba.keepOpenSeconds)
+
 		// Use chromedp.ExecAllocator approach with stealth flags to avoid detection
 		opts := []chromedp.ExecAllocatorOption{
 			chromedp.NoFirstRun,
 			chromedp.NoDefaultBrowserCheck,
 			chromedp.UserDataDir(userDataDir),
-			chromedp.Flag("headless", !ba.debug),
+			chromedp.Flag("headless", headless),
 			chromedp.Flag("window-size", "1280,800"),
 			chromedp.Flag("new-window", true),
 			chromedp.Flag("no-first-run", true),
@@ -168,8 +221,7 @@ func (ba *BrowserAuth) tryMultipleProfiles(targetURL string) (token, cookies str
 		ctx, cancel = chromedp.NewContext(allocCtx)
 		defer cancel()
 
-		// Use a longer timeout (45 seconds) to give more time for login processes
-		ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, authTimeout(ba.keepOpenSeconds, 45))
 		defer cancel()
 
 		if ba.debug {
@@ -612,6 +664,12 @@ func (ba *BrowserAuth) GetAuth(opts ...Option) (token, cookies string, err error
 	}
 
 	if selectedProfile == nil {
+		if ba.keepOpenSeconds > 0 {
+			if ba.debug {
+				fmt.Println("No existing browser profile found, starting interactive bootstrap profile")
+			}
+			return ba.authenticateWithFreshProfile(o.TargetURL, "Chrome")
+		}
 		return "", "", fmt.Errorf("no valid profiles found")
 	}
 
@@ -630,17 +688,23 @@ func (ba *BrowserAuth) GetAuth(opts ...Option) (token, cookies string, err error
 	var ctx context.Context
 	var cancel context.CancelFunc
 
+	headless := resolveHeadlessMode(ba.debug, ba.keepOpenSeconds)
+
 	// Use chromedp.ExecAllocator approach with minimal automation flags
 	chromeOpts := []chromedp.ExecAllocatorOption{
 		chromedp.NoFirstRun,
 		chromedp.NoDefaultBrowserCheck,
 		chromedp.UserDataDir(ba.tempDir),
-		chromedp.Flag("headless", !ba.debug),
+		chromedp.Flag("headless", headless),
 		chromedp.Flag("window-size", "1280,800"),
 		chromedp.Flag("new-window", true),
 		chromedp.Flag("no-first-run", true),
 		chromedp.Flag("disable-default-apps", true),
 		chromedp.Flag("remote-debugging-port", "0"), // Use random port
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("exclude-switches", "enable-automation"),
+		chromedp.Flag("disable-extensions-except", ""),
+		chromedp.Flag("disable-plugins-discovery", true),
 
 		// Use the appropriate browser executable for this profile type
 		chromedp.ExecPath(getBrowserPathForProfile(selectedProfile.Browser)),
@@ -651,7 +715,7 @@ func (ba *BrowserAuth) GetAuth(opts ...Option) (token, cookies string, err error
 	ctx, cancel = chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, authTimeout(ba.keepOpenSeconds, 60))
 	defer cancel()
 
 	if ba.debug {
@@ -661,6 +725,54 @@ func (ba *BrowserAuth) GetAuth(opts ...Option) (token, cookies string, err error
 	}
 
 	return ba.extractAuthData(ctx)
+}
+
+func (ba *BrowserAuth) authenticateWithFreshProfile(targetURL, browserName string) (token, cookies string, err error) {
+	tempDir, err := os.MkdirTemp("", "nlm-chrome-bootstrap-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create bootstrap profile dir: %w", err)
+	}
+	ba.tempDir = tempDir
+
+	headless := resolveHeadlessMode(ba.debug, ba.keepOpenSeconds)
+	chromePath := getBrowserPathForProfile(browserName)
+	if chromePath == "" {
+		return "", "", fmt.Errorf("browser not found for interactive bootstrap")
+	}
+
+	opts := []chromedp.ExecAllocatorOption{
+		chromedp.NoFirstRun,
+		chromedp.NoDefaultBrowserCheck,
+		chromedp.UserDataDir(tempDir),
+		chromedp.Flag("headless", headless),
+		chromedp.Flag("window-size", "1280,800"),
+		chromedp.Flag("new-window", true),
+		chromedp.Flag("no-first-run", true),
+		chromedp.Flag("disable-default-apps", true),
+		chromedp.Flag("remote-debugging-port", "0"),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("exclude-switches", "enable-automation"),
+		chromedp.Flag("disable-extensions-except", ""),
+		chromedp.Flag("disable-plugins-discovery", true),
+		chromedp.ExecPath(chromePath),
+	}
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	ba.cancel = allocCancel
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	ctx, cancel = context.WithTimeout(ctx, authTimeout(ba.keepOpenSeconds, 60))
+	defer cancel()
+
+	if ba.debug {
+		ctx, _ = chromedp.NewContext(ctx, chromedp.WithLogf(func(format string, args ...interface{}) {
+			fmt.Printf("ChromeDP: "+format+"\n", args...)
+		}))
+	}
+
+	return ba.extractAuthDataForURL(ctx, targetURL)
 }
 
 // copyProfileData first resolves the profile name to a path and then calls copyProfileDataFromPath
@@ -989,6 +1101,11 @@ func (ba *BrowserAuth) extractAuthData(ctx context.Context) (token, cookies stri
 }
 
 func (ba *BrowserAuth) extractAuthDataForURL(ctx context.Context, targetURL string) (token, cookies string, err error) {
+	// Install stealth hooks before any navigation to reduce "insecure browser/app" detection.
+	_ = chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		return installStealthHooks(ctx)
+	}))
+
 	// Navigate and wait for initial page load
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(targetURL),
@@ -997,44 +1114,13 @@ func (ba *BrowserAuth) extractAuthDataForURL(ctx context.Context, targetURL stri
 		return "", "", fmt.Errorf("failed to load page: %w", err)
 	}
 
-	// Execute anti-detection JavaScript to hide automation traces
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`
-		// Hide webdriver property
-		delete window.navigator.webdriver;
-
-		// Override the plugins property to look normal
-		Object.defineProperty(navigator, 'plugins', {
-			get: () => Array.from({length: Math.floor(Math.random() * 5) + 1}, () => ({}))
-		});
-
-		// Override permissions property
-		const originalQuery = window.navigator.permissions.query;
-		window.navigator.permissions.query = (parameters) => (
-			parameters.name === 'notifications' ?
-				Promise.resolve({ state: Notification.permission }) :
-				originalQuery(parameters)
-		);
-
-		// Override chrome runtime if it exists
-		if (window.chrome && window.chrome.runtime) {
-			delete window.chrome.runtime.onConnect;
-			delete window.chrome.runtime.onMessage;
-		}
-	`, nil)); err != nil {
-		// Don't fail if anti-detection script fails, just log it
-		if ba.debug {
-			fmt.Printf("Anti-detection script failed: %v\n", err)
-		}
+	interactiveMode := ba.keepOpenSeconds > 0
+	if interactiveMode {
+		fmt.Printf("\n⏳ Interactive auth enabled. You have up to %d seconds to complete login if required...\n", ba.keepOpenSeconds)
+		fmt.Printf("  Keep this browser window open until auth is captured.\n\n")
 	}
 
-	// If keep-open is set, give user time to manually authenticate BEFORE checking
-	if ba.keepOpenSeconds > 0 {
-		fmt.Printf("\n⏳ Browser opened. You have %d seconds to manually log in if needed...\n", ba.keepOpenSeconds)
-		fmt.Printf("  If already logged in, just wait for automatic authentication.\n\n")
-		time.Sleep(time.Duration(ba.keepOpenSeconds) * time.Second)
-	}
-
-	// First check if we're already on a login page, which would indicate authentication failure
+	// First check current landing URL.
 	var currentURL string
 	if err := chromedp.Run(ctx, chromedp.Location(&currentURL)); err == nil {
 		// Log the initial URL we landed on
@@ -1042,20 +1128,26 @@ func (ba *BrowserAuth) extractAuthDataForURL(ctx context.Context, targetURL stri
 			fmt.Printf("Initial navigation landed on: %s\n", currentURL)
 		}
 
-		// If we immediately landed on an auth page, this profile is likely not authenticated
+		// If we immediately landed on an auth page and we're not in interactive mode,
+		// this profile is likely not authenticated.
 		if strings.Contains(currentURL, "accounts.google.com") ||
 			strings.Contains(currentURL, "signin") ||
 			strings.Contains(currentURL, "login") {
 			if ba.debug {
 				fmt.Printf("Redirected to auth page: %s\n", currentURL)
 			}
-
-			return "", "", fmt.Errorf("redirected to authentication page - not logged in")
+			if !interactiveMode {
+				return "", "", fmt.Errorf("redirected to authentication page - not logged in")
+			}
 		}
 	}
 
-	// Create timeout context for polling - increased timeout for better success with Brave
-	pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Create timeout context for polling.
+	pollSeconds := 30
+	if interactiveMode && ba.keepOpenSeconds > pollSeconds {
+		pollSeconds = ba.keepOpenSeconds
+	}
+	pollCtx, cancel := context.WithTimeout(ctx, time.Duration(pollSeconds)*time.Second)
 	defer cancel()
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -1076,9 +1168,9 @@ func (ba *BrowserAuth) extractAuthDataForURL(ctx context.Context, targetURL stri
 			token, cookies, err = ba.tryExtractAuth(ctx)
 			if err != nil {
 				// Count specific failures that indicate we're definitely not authenticated
-				if strings.Contains(err.Error(), "sign-in") ||
+				if !interactiveMode && (strings.Contains(err.Error(), "sign-in") ||
 					strings.Contains(err.Error(), "login") ||
-					strings.Contains(err.Error(), "missing essential") {
+					strings.Contains(err.Error(), "missing essential")) {
 					authFailCount++
 
 					// If we've had too many clear auth failures, give up earlier

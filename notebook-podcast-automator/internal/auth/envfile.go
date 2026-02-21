@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -40,14 +41,30 @@ func readEnvFileKV(path string) (map[string]string, error) {
 	return kv, nil
 }
 
-func writeNlmEnvFile(path, token, cookies, browserProfile string) error {
+func writeNlmEnvFile(path, token, cookies, browserProfile string, extra ...map[string]string) error {
 	// Mirror nlm_upstream: overwrite with only the keys we control.
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 
-	content := fmt.Sprintf("NLM_COOKIES=%q\nNLM_AUTH_TOKEN=%q\nNLM_BROWSER_PROFILE=%q\n", cookies, token, browserProfile)
-	return os.WriteFile(path, []byte(content), 0600)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("NLM_COOKIES=%q\nNLM_AUTH_TOKEN=%q\nNLM_BROWSER_PROFILE=%q\n", cookies, token, browserProfile))
+
+	if len(extra) > 0 && extra[0] != nil {
+		keys := make([]string, 0, len(extra[0]))
+		for k, v := range extra[0] {
+			if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+				continue
+			}
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			b.WriteString(fmt.Sprintf("%s=%q\n", k, extra[0][k]))
+		}
+	}
+
+	return os.WriteFile(path, []byte(b.String()), 0600)
 }
 
 func updateEnvFileKeys(path string, updates map[string]string) error {

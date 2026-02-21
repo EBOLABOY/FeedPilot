@@ -10,6 +10,8 @@ This project provides a robust, purely Go-based solution to automate the extract
 
 ## Prerequisites
 1.  **Authentication**: You must have `NLM_AUTH_TOKEN` and `NLM_COOKIES` in your `.env` file (migrated from `~/.nlm/env` or manually obtained).
+    - The runtime now auto-syncs dynamic NotebookLM session parameters `NLM_F_SID` and `NLM_BL` from the web page when credentials are refreshed.
+    - If you explicitly need legacy behavior, set `NLM_DISABLE_WEB_SESSION_REFRESH=true`.
 2.  **Proxy (Optional)**: Set `NLM_PROXY_URL` or `HTTP_PROXY`/`HTTPS_PROXY`. If none is set, the server will auto-detect a local proxy at `127.0.0.1:10809`.
 
 ## Usage
@@ -110,6 +112,23 @@ $body = @{
 } | ConvertTo-Json -Depth 6
 Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'application/json' -Body $body
 ```
+
+## Docker Long-Running Notes
+- Container runtime does not need your desktop browser for normal refresh. It uses existing `NLM_COOKIES` to refresh `NLM_AUTH_TOKEN`, `NLM_F_SID`, `NLM_BL`.
+- For long-running stability, persist refreshed credentials:
+  - Mount `./.env` to `/app/.env`
+  - Mount `./.nlm` to `/root/.nlm`
+  - Enable keepalive (`NLM_KEEPALIVE_INTERVAL`, `NLM_KEEPALIVE_PERSIST=true`, `NLM_PERSIST_COOKIES=true`)
+- If Google session cookies fully expire, one manual cookie refresh is still required.
+
+### Interactive Re-Auth in Docker (VNC)
+- This repo supports interactive browser fallback inside container:
+  - `NLM_BROWSER_AUTH_ON_REFRESH_FAIL=true`
+  - `NLM_BROWSER_KEEP_OPEN_SECONDS=600`
+  - `NLM_ENABLE_VNC_BROWSER=true`
+  - `NLM_BROWSER_HEADLESS=false`
+- `docker-compose*.yml` exposes `${NLM_VNC_PORT:-5900}`.
+- When refresh fails and login is required, service will open browser auth flow; connect a VNC client to complete login, then credentials are auto-captured and persisted.
 
 ## CI: Build & Push to Docker Hub (GitHub Actions)
 This repo includes a workflow that builds the Docker image and pushes it to Docker Hub on every push to the `go-podcast-automator` branch (and on tags `v*`).
