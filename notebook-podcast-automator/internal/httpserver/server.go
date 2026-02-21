@@ -105,6 +105,9 @@ func Run() error {
 	netutil.MaybeSetLocalProxy()
 
 	srv := &Server{}
+	if err := srv.bootstrapAuthIfConfigured(); err != nil {
+		return err
+	}
 	srv.startNlmKeepaliveIfConfigured()
 	srv.startSchedulerIfConfigured()
 	mux := http.NewServeMux()

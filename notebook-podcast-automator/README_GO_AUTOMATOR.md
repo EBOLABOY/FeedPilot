@@ -130,6 +130,14 @@ Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/run' -ContentType 'ap
 - `docker-compose*.yml` exposes `${NLM_VNC_PORT:-5900}`.
 - When refresh fails and login is required, service will open browser auth flow; connect a VNC client to complete login, then credentials are auto-captured and persisted.
 
+### One-Time Bootstrap Auth on First Deployment
+- Compose defaults now enable one-time bootstrap auth at startup:
+  - `NLM_BOOTSTRAP_AUTH_ON_START=true`
+  - `NLM_BOOTSTRAP_AUTH_REQUIRE_SUCCESS=true`
+  - `NLM_BOOTSTRAP_MARKER_PATH=/app/data/.nlm_bootstrap_done`
+- On first startup (no marker file), service forces credential bootstrap and writes refreshed auth to `.env`/`.nlm`.
+- After success, marker file is created and later restarts skip bootstrap.
+
 ## CI: Build & Push to Docker Hub (GitHub Actions)
 This repo includes a workflow that builds the Docker image and pushes it to Docker Hub on every push to the `go-podcast-automator` branch (and on tags `v*`).
 
