@@ -28,3 +28,14 @@ services:
       - ./downloads:/app/downloads
       - ./data:/app/data
     restart: unless-stopped
+
+  novnc:
+    # 浏览器访问 VNC 桌面的代理（HTTP -> WebSocket -> VNC）
+    image: "gotget/novnc:latest"
+    container_name: notebook-podcast-automator-novnc
+    depends_on:
+      - automator
+    command: --vnc automator:5900
+    ports:
+      - "${NLM_NOVNC_PORT:-6080}:6080"
+    restart: unless-stopped
